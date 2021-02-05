@@ -1,3 +1,5 @@
 cython
-torch>=1.6.0
+dataclasses-json==0.4.2
+jsonlines~=1.2.0
 numpy==1.19.0
+torch>=1.6.0

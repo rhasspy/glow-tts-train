@@ -4,3 +4,5 @@ __pycache__/
 /build/
 /.venv/
 /dist/
+/local/
+/glow_tts_train/monotonic_align/*.so

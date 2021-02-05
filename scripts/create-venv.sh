@@ -26,13 +26,19 @@ rm -rf "${venv}"
 source "${venv}/bin/activate"
 
 # Install Python dependencies
-echo "Installing Python dependencies"
+echo 'Installing Python dependencies'
 pip3 ${PIP_INSTALL} --upgrade pip
 pip3 ${PIP_INSTALL} --upgrade wheel setuptools
 
 if [[ -f requirements.txt ]]; then
     pip3 ${PIP_INSTALL} -r requirements.txt
 fi
+
+
+echo 'Compiling monotonic_align extension'
+pushd "${src_dir}"
+python3 glow_tts_train/monotonic_align/setup.py build_ext --inplace
+popd
 
 # Development dependencies
 if [[ -f requirements_dev.txt ]]; then

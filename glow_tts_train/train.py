@@ -1,6 +1,7 @@
 import logging
 import time
 import typing
+from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
@@ -26,12 +27,16 @@ _LOGGER = logging.getLogger("glow_tts_train")
 def train(
     train_loader: DataLoader,
     config: TrainingConfig,
+    model_dir: Path,
     model: typing.Optional[ModelType] = None,
+    optimizer: typing.Optional[OptimizerType] = None,
+    global_step: int = 1,
 ):
     """Run training for the specified number of epochs"""
     torch.manual_seed(config.seed)
 
-    model, optimizer = setup_model(config, model=model)
+    model, optimizer = setup_model(config, model=model, optimizer=optimizer)
+    assert optimizer is not None
 
     amp_run = False
     if config.fp16_run and amp:
@@ -44,10 +49,10 @@ def train(
     assert model is not None
 
     # Begin training
-    global_step = 1
-
     for epoch in range(1, config.epochs + 1):
-        _LOGGER.debug("Begin epoch %s (global step=%s)", epoch, global_step)
+        _LOGGER.debug(
+            "Begin epoch %s/%s (global step=%s)", epoch, config.epochs, global_step
+        )
         epoch_start_time = time.perf_counter()
         global_step = train_step(
             global_step, epoch, model, optimizer, train_loader, amp_run
@@ -59,17 +64,19 @@ def train(
         # )
 
         # Save checkpoint
-        checkpoint_path = config.model_dir / f"checkpoint_{global_step}.pth"
+        checkpoint_path = model_dir / f"checkpoint_{global_step}.pth"
+        _LOGGER.debug("Saving checkpoint to %s", checkpoint_path)
         save_checkpoint(
             Checkpoint(
                 model=model,
                 optimizer=optimizer,
-                learning_rate=config.learning_rate,
+                learning_rate=optimizer.cur_lr,
                 global_step=global_step,
                 version=config.version,
             ),
             checkpoint_path,
         )
+        _LOGGER.info("Saved checkpoint to %s", checkpoint_path)
 
         epoch_end_time = time.perf_counter()
         _LOGGER.debug(

@@ -1,15 +1,27 @@
+"""Configuration classes"""
+import json
 import typing
 from dataclasses import dataclass, field
-from pathlib import Path
+
+from dataclasses_json import DataClassJsonMixin
 
 
 @dataclass
-class AudioConfig:
+class AudioConfig(DataClassJsonMixin):
+    filter_length: int = 1024
+    hop_length: int = 256
+    win_length: int = 256
     n_mel_channels: int = 80
+    sampling_rate: int = 22050
+    sample_bytes: int = 2
+    channels: int = 1
+    mel_fmin: float = 0.0
+    mel_fmax: float = 8000.0
+    normalized: bool = True
 
 
 @dataclass
-class ModelConfig:
+class ModelConfig(DataClassJsonMixin):
     num_symbols: int = 0
     hidden_channels: int = 192
     filter_channels: int = 768
@@ -37,9 +49,7 @@ class ModelConfig:
 
 
 @dataclass
-class TrainingConfig:
-    use_cuda: bool = True
-    log_interval: int = 20
+class TrainingConfig(DataClassJsonMixin):
     seed: int = 1234
     epochs: int = 10000
     learning_rate: float = 1e0
@@ -48,9 +58,16 @@ class TrainingConfig:
     warmup_steps: int = 4000
     scheduler: str = "noam"
     batch_size: int = 32
-    ddi: bool = True
     fp16_run: bool = True
-    model_dir: Path = Path.cwd()
     audio: AudioConfig = field(default_factory=AudioConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     version: int = 1
+
+    def save(self, config_file: typing.TextIO):
+        """Save config as JSON to a file"""
+        json.dump(self.to_json(), config_file, indent=4)
+
+    @staticmethod
+    def load(config_file: typing.TextIO) -> "TrainingConfig":
+        """Load config from a JSON file"""
+        return TrainingConfig.from_json(config_file.read())

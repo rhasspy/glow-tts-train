@@ -18,10 +18,10 @@ _LOGGER = logging.getLogger("glow-tts-train.checkpoint")
 @dataclass
 class Checkpoint:
     model: ModelType
-    optimizer: OptimizerType
     learning_rate: float
     global_step: int
     version: int
+    optimizer: typing.Optional[OptimizerType] = None
 
 
 def save_checkpoint(checkpoint: Checkpoint, checkpoint_path: Path):
@@ -35,16 +35,17 @@ def save_checkpoint(checkpoint: Checkpoint, checkpoint_path: Path):
     else:
         state_dict = model.state_dict()
 
-    torch.save(
-        {
-            "model": state_dict,
-            "global_step": checkpoint.global_step,
-            "optimizer": optimizer.state_dict(),
-            "learning_rate": checkpoint.learning_rate,
-            "version": checkpoint.version,
-        },
-        checkpoint_path,
-    )
+    checkpoint_dict = {
+        "model": state_dict,
+        "global_step": checkpoint.global_step,
+        "learning_rate": checkpoint.learning_rate,
+        "version": checkpoint.version,
+    }
+
+    if optimizer is not None:
+        checkpoint_dict["optimizer"] = optimizer.state_dict()
+
+    torch.save(checkpoint_dict, checkpoint_path)
 
 
 def load_checkpoint(
@@ -52,18 +53,27 @@ def load_checkpoint(
     config: TrainingConfig,
     model: typing.Optional[ModelType] = None,
     optimizer: typing.Optional[OptimizerType] = None,
+    load_optimizer: bool = True,
+    use_cuda: bool = True,
 ) -> Checkpoint:
     """Load model/optimizer/training state from a Torch checkpoint"""
     checkpoint_dict = torch.load(checkpoint_path, map_location="cpu")
-    version = int(checkpoint_dict["version"])
-    global_step = int(checkpoint_dict["global_step"])
-    learning_rate = float(checkpoint_dict["learning_rate"])
+    version = int(checkpoint_dict.get("version", 1))
+    global_step = int(checkpoint_dict.get("global_step", 1))
+    learning_rate = float(checkpoint_dict.get("learning_rate", 1.0))
 
     # Create model/optimizer if necessary
-    model, optimizer = setup_model(config, model=model, optimizer=optimizer)
+    model, optimizer = setup_model(
+        config,
+        model=model,
+        optimizer=optimizer,
+        create_optimizer=load_optimizer,
+        use_cuda=use_cuda,
+    )
 
     # Load optimizer state
-    optimizer.load_state_dict(checkpoint_dict["optimizer"])
+    if load_optimizer and (optimizer is not None):
+        optimizer.load_state_dict(checkpoint_dict["optimizer"])
 
     saved_state_dict = checkpoint_dict["model"]
     if hasattr(model, "module"):

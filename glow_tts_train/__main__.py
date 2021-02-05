@@ -8,10 +8,12 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
+from .checkpoint import load_checkpoint
 from .config import TrainingConfig
 from .dataset import PhonemeMelCollate, PhonemeMelLoader, load_mels, load_phonemes
 from .ddi import initialize_model
 from .models import ModelType
+from .optimize import OptimizerType
 from .train import train
 
 _LOGGER = logging.getLogger("glow_tts_train")
@@ -67,7 +69,6 @@ def main():
 
     # Create output directory
     args.model_dir.mkdir(parents=True, exist_ok=True)
-    config.model_dir = args.model_dir
 
     _LOGGER.debug("Setting random seed to %s", config.seed)
     random.seed(config.seed)
@@ -80,6 +81,7 @@ def main():
     _LOGGER.info("Loaded phonemes for %s utterances", len(id_phonemes))
 
     # Load mels
+    # TODO: Verify audio configuration
     _LOGGER.debug("Loading mels from %s", args.mels_jsonl)
     with open(args.mels_jsonl, "r") as mels_file:
         id_mels = load_mels(mels_file)
@@ -91,6 +93,13 @@ def main():
         config.model.num_symbols = max(max(p_ids) for p_ids in id_phonemes.values()) + 1
 
     assert config.model.num_symbols > 0, "No symbols"
+
+    # Save config
+    if not args.config.is_file():
+        with open(args.config, "w") as config_file:
+            config.save(config_file)
+
+        _LOGGER.debug("Saved config to %s", args.config)
 
     # Create data loader
     dataset = PhonemeMelLoader(id_phonemes, id_mels)
@@ -106,9 +115,24 @@ def main():
         collate_fn=collate_fn,
     )
 
-    # Data-dependent initialization
     model: typing.Optional[ModelType] = None
-    if not args.checkpoint:
+    optimizer: typing.Optional[OptimizerType] = None
+    global_step: int = 1
+
+    if args.checkpoint:
+        _LOGGER.debug("Loading checkpoint from %s", args.checkpoint)
+        checkpoint = load_checkpoint(args.checkpoint, config)
+        model, optimizer = checkpoint.model, checkpoint.optimizer
+        config.learning_rate = checkpoint.learning_rate
+        global_step = checkpoint.global_step
+        _LOGGER.info(
+            "Loaded checkpoint from %s (global step=%s, learning rate=%s)",
+            args.checkpoint,
+            global_step,
+            config.learning_rate,
+        )
+    else:
+        # Data-dependent initialization
         _LOGGER.info("Doing data-dependent initialization...")
         model = initialize_model(train_loader, config)
 
@@ -116,7 +140,14 @@ def main():
     _LOGGER.info("Training started (batch size=%s)", batch_size)
 
     try:
-        train(train_loader, config, model=model)
+        train(
+            train_loader,
+            config,
+            args.model_dir,
+            model=model,
+            optimizer=optimizer,
+            global_step=global_step,
+        )
         _LOGGER.info("Training finished")
     except KeyboardInterrupt:
         _LOGGER.info("Training stopped")

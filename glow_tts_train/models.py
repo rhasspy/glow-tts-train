@@ -416,7 +416,9 @@ def setup_model(
     optimizer: typing.Optional[OptimizerType] = None,
     model_factory=ModelType,
     optimizer_factory=OptimizerType,
-) -> typing.Tuple[ModelType, OptimizerType]:
+    create_optimizer: bool = True,
+    use_cuda: bool = True,
+) -> typing.Tuple[ModelType, typing.Optional[OptimizerType]]:
     if model is None:
         # Create new generator
         model = model_factory(
@@ -445,9 +447,12 @@ def setup_model(
             hidden_channels_enc=config.model.hidden_channels_enc,
             hidden_channels_dec=config.model.hidden_channels_dec,
             prenet=config.model.prenet,
-        ).cuda()
+        )
 
-    if optimizer is None:
+    if use_cuda:
+        model.cuda()
+
+    if create_optimizer and (optimizer is None):
         optimizer = optimizer_factory(
             model.parameters(),
             scheduler=config.scheduler,

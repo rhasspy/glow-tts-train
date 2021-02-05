@@ -20,6 +20,7 @@ def initialize_model(train_loader: DataLoader, config: TrainingConfig) -> ModelT
     """Do data-dependent model initialization"""
     torch.manual_seed(config.seed)
     model, _ = setup_model(config, model_factory=FlowGeneratorDDI)
+    model.cuda()
 
     model.train()
     for _batch_idx, (x, x_lengths, y, y_lengths) in enumerate(train_loader):
