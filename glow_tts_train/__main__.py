@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+import argparse
+import logging
+import random
+import typing
+from pathlib import Path
+
+import torch
+from torch.utils.data import DataLoader
+
+from .config import TrainingConfig
+from .dataset import PhonemeMelCollate, PhonemeMelLoader, load_mels, load_phonemes
+from .ddi import initialize_model
+from .models import ModelType
+from .train import train
+
+_LOGGER = logging.getLogger("glow_tts_train")
+
+
+def main():
+    """Main entry point"""
+    parser = argparse.ArgumentParser(prog="glow-tts-train")
+    parser.add_argument("model_dir", help="Directory to store model artifacts")
+    parser.add_argument(
+        "phonemes_csv", help="CSV file with utterance id|phoneme ids lines"
+    )
+    parser.add_argument("mels_jsonl", help="JSONL file with mel spectrograms")
+    parser.add_argument("--config", help="Path to JSON configuration file")
+    parser.add_argument(
+        "--batch-size", type=int, help="Batch size (default: use config)"
+    )
+    parser.add_argument("--checkpoint", help="Path to restore checkpoint")
+    parser.add_argument(
+        "--debug", action="store_true", help="Print DEBUG messages to the console"
+    )
+    args = parser.parse_args()
+
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    _LOGGER.debug(args)
+
+    # -------------------------------------------------------------------------
+
+    assert torch.cuda.is_available(), "GPU is required for training"
+
+    # -------------------------------------------------------------------------
+
+    # Convert to paths
+    args.model_dir = Path(args.model_dir)
+    args.phonemes_csv = Path(args.phonemes_csv)
+    args.mels_jsonl = Path(args.mels_jsonl)
+
+    if args.config:
+        args.config = Path(args.config)
+    else:
+        args.config = args.model_dir / "config.json"
+
+    if args.checkpoint:
+        args.checkpoint = Path(args.checkpoint)
+
+    # TODO: Load configuration
+    config = TrainingConfig()
+    _LOGGER.debug(config)
+
+    # Create output directory
+    args.model_dir.mkdir(parents=True, exist_ok=True)
+    config.model_dir = args.model_dir
+
+    _LOGGER.debug("Setting random seed to %s", config.seed)
+    random.seed(config.seed)
+
+    # Load phonemes
+    _LOGGER.debug("Loading phonemes from %s", args.phonemes_csv)
+    with open(args.phonemes_csv, "r") as phonemes_file:
+        id_phonemes = load_phonemes(phonemes_file)
+
+    _LOGGER.info("Loaded phonemes for %s utterances", len(id_phonemes))
+
+    # Load mels
+    _LOGGER.debug("Loading mels from %s", args.mels_jsonl)
+    with open(args.mels_jsonl, "r") as mels_file:
+        id_mels = load_mels(mels_file)
+
+    _LOGGER.info("Loaded mels for %s utterances", len(id_mels))
+
+    # Set num_symbols
+    if config.model.num_symbols < 1:
+        config.model.num_symbols = max(max(p_ids) for p_ids in id_phonemes.values()) + 1
+
+    assert config.model.num_symbols > 0, "No symbols"
+
+    # Create data loader
+    dataset = PhonemeMelLoader(id_phonemes, id_mels)
+    collate_fn = PhonemeMelCollate()
+
+    batch_size = config.batch_size if args.batch_size is None else args.batch_size
+    train_loader = DataLoader(
+        dataset,
+        shuffle=False,
+        batch_size=batch_size,
+        pin_memory=True,
+        drop_last=True,
+        collate_fn=collate_fn,
+    )
+
+    # Data-dependent initialization
+    model: typing.Optional[ModelType] = None
+    if not args.checkpoint:
+        _LOGGER.info("Doing data-dependent initialization...")
+        model = initialize_model(train_loader, config)
+
+    # Train
+    _LOGGER.info("Training started (batch size=%s)", batch_size)
+
+    try:
+        train(train_loader, config, model=model)
+        _LOGGER.info("Training finished")
+    except KeyboardInterrupt:
+        _LOGGER.info("Training stopped")
+
+
+# -----------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    main()
