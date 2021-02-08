@@ -33,6 +33,12 @@ def main():
     )
     parser.add_argument("--checkpoint", help="Path to restore checkpoint")
     parser.add_argument(
+        "--checkpoint-epochs",
+        type=int,
+        default=1,
+        help="Number of epochs between checkpoints",
+    )
+    parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to the console"
     )
     args = parser.parse_args()
@@ -147,6 +153,7 @@ def main():
             model=model,
             optimizer=optimizer,
             global_step=global_step,
+            checkpoint_epochs=args.checkpoint_epochs,
         )
         _LOGGER.info("Training finished")
     except KeyboardInterrupt:

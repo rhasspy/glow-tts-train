@@ -31,6 +31,7 @@ def train(
     model: typing.Optional[ModelType] = None,
     optimizer: typing.Optional[OptimizerType] = None,
     global_step: int = 1,
+    checkpoint_epochs: int = 1,
 ):
     """Run training for the specified number of epochs"""
     torch.manual_seed(config.seed)
@@ -63,20 +64,21 @@ def train(
         #     rank, epoch, hps, model, optimizer, val_loader, logger, writer_eval
         # )
 
-        # Save checkpoint
-        checkpoint_path = model_dir / f"checkpoint_{global_step}.pth"
-        _LOGGER.debug("Saving checkpoint to %s", checkpoint_path)
-        save_checkpoint(
-            Checkpoint(
-                model=model,
-                optimizer=optimizer,
-                learning_rate=optimizer.cur_lr,
-                global_step=global_step,
-                version=config.version,
-            ),
-            checkpoint_path,
-        )
-        _LOGGER.info("Saved checkpoint to %s", checkpoint_path)
+        if (epoch % checkpoint_epochs) == 0:
+            # Save checkpoint
+            checkpoint_path = model_dir / f"checkpoint_{global_step}.pth"
+            _LOGGER.debug("Saving checkpoint to %s", checkpoint_path)
+            save_checkpoint(
+                Checkpoint(
+                    model=model,
+                    optimizer=optimizer,
+                    learning_rate=optimizer.cur_lr,
+                    global_step=global_step,
+                    version=config.version,
+                ),
+                checkpoint_path,
+            )
+            _LOGGER.info("Saved checkpoint to %s", checkpoint_path)
 
         epoch_end_time = time.perf_counter()
         _LOGGER.debug(
