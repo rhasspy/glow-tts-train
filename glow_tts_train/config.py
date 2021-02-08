@@ -10,7 +10,7 @@ from dataclasses_json import DataClassJsonMixin
 class AudioConfig(DataClassJsonMixin):
     filter_length: int = 1024
     hop_length: int = 256
-    win_length: int = 256
+    win_length: int = 1024
     n_mel_channels: int = 80
     sampling_rate: int = 22050
     sample_bytes: int = 2
