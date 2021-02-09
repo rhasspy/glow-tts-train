@@ -10,7 +10,7 @@ from .config import TrainingConfig
 from .models import ModelType, setup_model
 from .optimize import OptimizerType
 
-_LOGGER = logging.getLogger("glow-tts-train.checkpoint")
+_LOGGER = logging.getLogger("glow_tts_train.checkpoint")
 
 # -----------------------------------------------------------------------------
 
