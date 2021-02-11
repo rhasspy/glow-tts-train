@@ -27,7 +27,9 @@ def main():
         "phonemes_csv", help="CSV file with utterance id|phoneme ids lines"
     )
     parser.add_argument("mels_jsonl", help="JSONL file with mel spectrograms")
-    parser.add_argument("--config", help="Path to JSON configuration file")
+    parser.add_argument(
+        "--config", action="append", help="Path to JSON configuration file(s)"
+    )
     parser.add_argument(
         "--batch-size", type=int, help="Batch size (default: use config)"
     )
@@ -62,15 +64,17 @@ def main():
     args.mels_jsonl = Path(args.mels_jsonl)
 
     if args.config:
-        args.config = Path(args.config)
-    else:
-        args.config = args.model_dir / "config.json"
+        args.config = [Path(p) for p in args.config]
 
     if args.checkpoint:
         args.checkpoint = Path(args.checkpoint)
 
-    # TODO: Load configuration
+    # Load configuration
     config = TrainingConfig()
+    if args.config:
+        _LOGGER.debug("Loading configuration(s) from %s", args.config)
+        config = TrainingConfig.load_and_merge(config, args.config)
+
     _LOGGER.debug(config)
 
     # Create output directory
