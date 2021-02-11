@@ -61,15 +61,26 @@ class Encoder(nn.Module):
 
     def forward(self, x, x_mask):
         attn_mask = x_mask.unsqueeze(2) * x_mask.unsqueeze(-1)
-        for i in range(self.n_layers):
-            x = x * x_mask
-            y = self.attn_layers[i](x, x, attn_mask)
-            y = self.drop(y)
-            x = self.norm_layers_1[i](x + y)
+        # for i in range(self.n_layers):
+        #     x = x * x_mask
+        #     y = self.attn_layers[i](x, x, attn_mask)
+        #     y = self.drop(y)
+        #     x = self.norm_layers_1[i](x + y)
 
-            y = self.ffn_layers[i](x, x_mask)
+        #     y = self.ffn_layers[i](x, x_mask)
+        #     y = self.drop(y)
+        #     x = self.norm_layers_2[i](x + y)
+        for attn_layer, norm_layer_1, ffn_layer, norm_layer_2 in zip(
+            self.attn_layers, self.norm_layers_1, self.ffn_layers, self.norm_layers_2
+        ):
+            x = x * x_mask
+            y = attn_layer(x, x, attn_mask)
             y = self.drop(y)
-            x = self.norm_layers_2[i](x + y)
+            x = norm_layer_1(x + y)
+
+            y = ffn_layer(x, x_mask)
+            y = self.drop(y)
+            x = norm_layer_2(x + y)
         x = x * x_mask
         return x
 
@@ -116,9 +127,15 @@ class CouplingBlock(nn.Module):
             p_dropout,
         )
 
-    def forward(self, x, x_mask=None, reverse: bool = False, g=None):
+    def forward(
+        self,
+        x: torch.Tensor,
+        x_mask: typing.Optional[torch.Tensor] = None,
+        reverse: bool = False,
+        g: typing.Optional[torch.Tensor] = None,
+    ):
         if x_mask is None:
-            x_mask = 1
+            x_mask = torch.ones_like(x)
         x_0, x_1 = x[:, : self.in_channels // 2], x[:, self.in_channels // 2 :]
 
         x = self.start(x_0) * x_mask
@@ -169,7 +186,7 @@ class MultiHeadAttention(nn.Module):
         self.block_length = block_length
         self.proximal_bias = proximal_bias
         self.p_dropout = p_dropout
-        self.attn = None
+        self.attn = torch.zeros(1)
 
         self.k_channels = channels // n_heads
         self.conv_q = nn.Conv1d(channels, channels, 1)
@@ -201,17 +218,18 @@ class MultiHeadAttention(nn.Module):
             self.conv_k.bias.data.copy_(self.conv_q.bias.data)
         nn.init.xavier_uniform_(self.conv_v.weight)
 
-    def forward(self, x, c, attn_mask=None):
+    def forward(self, x, c, attn_mask: typing.Optional[torch.Tensor] = None):
         q = self.conv_q(x)
         k = self.conv_k(c)
         v = self.conv_v(c)
 
-        x, self.attn = self.attention(q, k, v, mask=attn_mask)
+        x, attn = self.attention(q, k, v, mask=attn_mask)
+        self.attn = attn
 
         x = self.conv_o(x)
         return x
 
-    def attention(self, query, key, value, mask=None):
+    def attention(self, query, key, value, mask: typing.Optional[torch.Tensor] = None):
         # reshape [b, d, t] -> [b, n_h, t, d_k]
         assert len(key.size()) == 3
         b, d, t_s = key.size()
@@ -281,7 +299,7 @@ class MultiHeadAttention(nn.Module):
         ret = torch.matmul(x, y.unsqueeze(0).transpose(-2, -1))
         return ret
 
-    def _get_relative_embeddings(self, relative_embeddings, length):
+    def _get_relative_embeddings(self, relative_embeddings, length: int):
         # max_relative_position = 2 * self.window_size + 1
         # Pad first before slice to avoid using cond ops.
         pad_length = max(length - (self.window_size + 1), 0)
@@ -326,13 +344,15 @@ class MultiHeadAttention(nn.Module):
         batch, heads, length, _ = x.size()
         # padd along column
         x = F.pad(x, convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, length - 1]]))
-        x_flat = x.view([batch, heads, length ** 2 + length * (length - 1)])
+        x_flat = x.view(
+            [int(batch), int(heads), int(length ** 2 + length * (length - 1))]
+        )
         # add 0's in the beginning that will skew the elements after reshape
         x_flat = F.pad(x_flat, convert_pad_shape([[0, 0], [0, 0], [length, 0]]))
         x_final = x_flat.view([batch, heads, length, 2 * length])[:, :, :, 1:]
         return x_final
 
-    def _attention_bias_proximal(self, length):
+    def _attention_bias_proximal(self, length: int):
         """Bias for self-attention to encourage attention to close positions.
     Args:
       length: an integer scalar.
@@ -347,12 +367,12 @@ class MultiHeadAttention(nn.Module):
 class FFN(nn.Module):
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        filter_channels,
-        kernel_size,
-        p_dropout=0.0,
-        activation=None,
+        in_channels: int,
+        out_channels: int,
+        filter_channels: int,
+        kernel_size: int,
+        p_dropout: float = 0.0,
+        activation: str = "",
     ):
         super().__init__()
         self.in_channels = in_channels

@@ -23,20 +23,21 @@ class LayerNorm(nn.Module):
 
         x = (x - mean) * torch.rsqrt(variance + self.eps)
 
-        shape = [1, -1] + [1] * (n_dims - 2)
-        x = x * self.gamma.view(*shape) + self.beta.view(*shape)
+        shape = torch.Size([1, -1] + [1] * (n_dims - 2))
+        # x = x * self.gamma.view(*shape) + self.beta.view(*shape)
+        x = x * self.gamma.view(shape) + self.beta.view(shape)
         return x
 
 
 class ConvReluNorm(nn.Module):
     def __init__(
         self,
-        in_channels,
-        hidden_channels,
-        out_channels,
-        kernel_size,
-        n_layers,
-        p_dropout,
+        in_channels: int,
+        hidden_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        n_layers: int,
+        p_dropout: float,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -72,9 +73,13 @@ class ConvReluNorm(nn.Module):
 
     def forward(self, x, x_mask):
         x_org = x
-        for i in range(self.n_layers):
-            x = self.conv_layers[i](x * x_mask)
-            x = self.norm_layers[i](x)
+        # for i in range(self.n_layers):
+        #     x = self.conv_layers[i](x * x_mask)
+        #     x = self.norm_layers[i](x)
+        #     x = self.relu_drop(x)
+        for conv_layer, norm_layer in zip(self.conv_layers, self.norm_layers):
+            x = conv_layer(x * x_mask)
+            x = norm_layer(x)
             x = self.relu_drop(x)
         x = x_org + self.proj(x)
         return x * x_mask
@@ -83,13 +88,13 @@ class ConvReluNorm(nn.Module):
 class WN(torch.nn.Module):
     def __init__(
         self,
-        in_channels,
-        hidden_channels,
-        kernel_size,
-        dilation_rate,
-        n_layers,
-        gin_channels=0,
-        p_dropout=0,
+        in_channels: int,
+        hidden_channels: int,
+        kernel_size: int,
+        dilation_rate: int,
+        n_layers: int,
+        gin_channels: int = 0,
+        p_dropout: float = 0.0,
     ):
         super(WN, self).__init__()
         assert kernel_size % 2 == 1
@@ -105,6 +110,10 @@ class WN(torch.nn.Module):
         self.in_layers = torch.nn.ModuleList()
         self.res_skip_layers = torch.nn.ModuleList()
         self.drop = nn.Dropout(p_dropout)
+
+        self.cond_layer: typing.Optional[
+            typing.Callable[torch.Tensor, torch.Tensor]
+        ] = None
 
         if gin_channels != 0:
             cond_layer = torch.nn.Conv1d(
@@ -135,15 +144,24 @@ class WN(torch.nn.Module):
             res_skip_layer = torch.nn.utils.weight_norm(res_skip_layer, name="weight")
             self.res_skip_layers.append(res_skip_layer)
 
-    def forward(self, x, x_mask=None, g=None, **kwargs):
+    def forward(
+        self,
+        x: torch.Tensor,
+        x_mask: typing.Optional[torch.Tensor] = None,
+        g: typing.Optional[torch.Tensor] = None,
+    ):
+        assert x_mask is not None
         output = torch.zeros_like(x)
-        n_channels_tensor = torch.IntTensor([self.hidden_channels])
+        n_channels_tensor = torch.tensor([self.hidden_channels])
 
         if g is not None:
+            assert self.cond_layer is not None
             g = self.cond_layer(g)
 
-        for i in range(self.n_layers):
-            x_in = self.in_layers[i](x)
+        for i, (in_layer, res_skip_layer) in enumerate(
+            zip(self.in_layers, self.res_skip_layers)
+        ):
+            x_in = in_layer(x)
             x_in = self.drop(x_in)
             if g is not None:
                 cond_offset = i * 2 * self.hidden_channels
@@ -153,12 +171,13 @@ class WN(torch.nn.Module):
 
             acts = fused_add_tanh_sigmoid_multiply(x_in, g_l, n_channels_tensor)
 
-            res_skip_acts = self.res_skip_layers[i](acts)
+            res_skip_acts = res_skip_layer(acts)
             if i < self.n_layers - 1:
                 x = (x + res_skip_acts[:, : self.hidden_channels, :]) * x_mask
                 output = output + res_skip_acts[:, self.hidden_channels :, :]
             else:
                 output = output + res_skip_acts
+
         return output * x_mask
 
     def remove_weight_norm(self):
@@ -171,7 +190,7 @@ class WN(torch.nn.Module):
 
 
 class ActNorm(nn.Module):
-    def __init__(self, channels, ddi=False, **kwargs):
+    def __init__(self, channels: int, ddi: bool = False):
         super().__init__()
         self.channels = channels
         self.initialized = not ddi
@@ -179,7 +198,13 @@ class ActNorm(nn.Module):
         self.logs = nn.Parameter(torch.zeros(1, channels, 1))
         self.bias = nn.Parameter(torch.zeros(1, channels, 1))
 
-    def forward(self, x, x_mask=None, reverse=False, **kwargs):
+    def forward(
+        self,
+        x: torch.Tensor,
+        x_mask: typing.Optional[torch.Tensor] = None,
+        reverse: bool = False,
+        g: typing.Optional[torch.Tensor] = None,
+    ):
         if x_mask is None:
             x_mask = torch.ones(x.size(0), 1, x.size(2)).to(
                 device=x.device, dtype=x.dtype
@@ -201,10 +226,10 @@ class ActNorm(nn.Module):
     def store_inverse(self):
         pass
 
-    def set_ddi(self, ddi):
+    def set_ddi(self, ddi: bool):
         self.initialized = not ddi
 
-    def initialize(self, x, x_mask):
+    def initialize(self, x: torch.Tensor, x_mask: torch.Tensor):
         with torch.no_grad():
             denom = torch.sum(x_mask, [0, 2])
             m = torch.sum(x * x_mask, [0, 2]) / denom
@@ -213,16 +238,16 @@ class ActNorm(nn.Module):
             logs = 0.5 * torch.log(torch.clamp_min(v, 1e-6))
 
             bias_init = (
-                (-m * torch.exp(-logs)).view(*self.bias.shape).to(dtype=self.bias.dtype)
+                (-m * torch.exp(-logs)).view(self.bias.size()).to(dtype=self.bias.dtype)
             )
-            logs_init = (-logs).view(*self.logs.shape).to(dtype=self.logs.dtype)
+            logs_init = (-logs).view(self.logs.size()).to(dtype=self.logs.dtype)
 
             self.bias.data.copy_(bias_init)
             self.logs.data.copy_(logs_init)
 
 
 class InvConvNear(nn.Module):
-    def __init__(self, channels, n_split=4, no_jacobian=False, **kwargs):
+    def __init__(self, channels: int, n_split: int = 4, no_jacobian: bool = False):
         super().__init__()
         assert n_split % 2 == 0
         self.channels = channels
@@ -235,11 +260,17 @@ class InvConvNear(nn.Module):
             w_init[:, 0] = -1 * w_init[:, 0]
         self.weight = nn.Parameter(w_init)
 
-    def forward(self, x, x_mask=None, reverse=False, **kwargs):
+    def forward(
+        self,
+        x: torch.Tensor,
+        x_mask: typing.Optional[torch.Tensor] = None,
+        reverse: bool = False,
+        g: typing.Optional[torch.Tensor] = None,
+    ):
         b, c, t = x.size()
         assert c % self.n_split == 0
         if x_mask is None:
-            x_mask = 1
+            x_mask = torch.ones_like(x)
             x_len = torch.ones((b,), dtype=x.dtype, device=x.device) * t
         else:
             x_len = torch.sum(x_mask, [1, 2])
@@ -251,16 +282,16 @@ class InvConvNear(nn.Module):
             .view(b, self.n_split, c // self.n_split, t)
         )
 
+        logdet: typing.Optional[torch.Tensor] = None
         if reverse:
-            if hasattr(self, "weight_inv"):
+            if self.weight_inv is not None:
                 weight = self.weight_inv
             else:
                 weight = torch.inverse(self.weight.float()).to(dtype=self.weight.dtype)
-            logdet = None
         else:
             weight = self.weight
             if self.no_jacobian:
-                logdet = 0
+                logdet = torch.zeros(1)
             else:
                 logdet = torch.logdet(self.weight) * (c / self.n_split) * x_len  # [b]
 
