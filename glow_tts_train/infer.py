@@ -3,6 +3,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 import jsonlines
@@ -17,8 +18,13 @@ _LOGGER = logging.getLogger("glow_tts_train.infer")
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(prog="glow-tts-train.infer")
-    parser.add_argument("config", help="Path to JSON configuration file")
     parser.add_argument("checkpoint", help="Path to model checkpoint (.pth)")
+    parser.add_argument(
+        "--config", action="append", help="Path to JSON configuration file(s)"
+    )
+    parser.add_argument(
+        "--num-symbols", type=int, help="Number of symbols in the model"
+    )
     parser.add_argument(
         "--csv", action="store_true", help="Input format is id|p1 p2 p3..."
     )
@@ -40,13 +46,27 @@ def main():
     # -------------------------------------------------------------------------
 
     # Convert to paths
-    args.config = Path(args.config)
+    if args.config:
+        args.config = [Path(p) for p in args.config]
+
     args.checkpoint = Path(args.checkpoint)
 
     # Load config
-    with open(args.config, "r") as config_file:
-        config = TrainingConfig.load(config_file)
+    config = TrainingConfig()
+    if args.config:
+        _LOGGER.debug("Loading configuration(s) from %s", args.config)
+        config = TrainingConfig.load_and_merge(config, args.config)
 
+    if args.num_symbols is not None:
+        config.model.num_symbols = args.num_symbols
+
+    _LOGGER.debug(config)
+
+    assert (
+        config.model.num_symbols > 0
+    ), "Number of symbols not set (did you forget --config or --num-symbols?)"
+
+    # Default mel settings
     output_obj = {
         "id": "",
         "audio": {
@@ -65,12 +85,16 @@ def main():
     }
 
     # Load checkpoint
+    start_time = time.perf_counter()
     _LOGGER.debug("Loading checkpoint from %s", args.checkpoint)
     checkpoint = load_checkpoint(args.checkpoint, config, use_cuda=args.cuda)
+    end_time = time.perf_counter()
+
     model, _ = checkpoint.model, checkpoint.optimizer
     _LOGGER.info(
-        "Loaded checkpoint from %s (global step=%s)",
+        "Loaded checkpoint from %s in %s second(s) (global step=%s)",
         args.checkpoint,
+        end_time - start_time,
         checkpoint.global_step,
     )
 
@@ -105,11 +129,12 @@ def main():
             text_lengths = torch.LongTensor([text.shape[1]])
 
             if args.cuda:
-                text.cuda()
-                text_lengths.cuda()
+                text.contiguous().cuda()
+                text_lengths.contiguous().cuda()
 
             # Infer mel spectrograms
             with torch.no_grad():
+                start_time = time.perf_counter()
                 (mel, *_), *_, (_attn_gen, *_) = model(
                     text,
                     text_lengths,
@@ -117,6 +142,7 @@ def main():
                     noise_scale=args.noise_scale,
                     length_scale=args.length_scale,
                 )
+                end_time = time.perf_counter()
 
                 # Write mel spectrogram and settings as a JSON object on one line
                 mel_list = mel.squeeze(0).cpu().float().numpy().tolist()
@@ -124,6 +150,10 @@ def main():
                 output_obj["mel"] = mel_list
 
                 writer.write(output_obj)
+
+                _LOGGER.debug(
+                    "Generated mel in %s second(s) (%s)", end_time - start_time, utt_id
+                )
     except KeyboardInterrupt:
         pass
 
