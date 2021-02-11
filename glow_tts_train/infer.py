@@ -19,7 +19,9 @@ def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(prog="glow-tts-train.infer")
     parser.add_argument("checkpoint", help="Path to model checkpoint (.pth)")
-    parser.add_argument("--config", help="Path to JSON configuration file(s)")
+    parser.add_argument(
+        "--config", action="append", help="Path to JSON configuration file(s)"
+    )
     parser.add_argument(
         "--num-symbols", type=int, help="Number of symbols in the model"
     )
@@ -83,12 +85,16 @@ def main():
     }
 
     # Load checkpoint
+    start_time = time.perf_counter()
     _LOGGER.debug("Loading checkpoint from %s", args.checkpoint)
     checkpoint = load_checkpoint(args.checkpoint, config, use_cuda=args.cuda)
+    end_time = time.perf_counter()
+
     model, _ = checkpoint.model, checkpoint.optimizer
     _LOGGER.info(
-        "Loaded checkpoint from %s (global step=%s)",
+        "Loaded checkpoint from %s in %s second(s) (global step=%s)",
         args.checkpoint,
+        end_time - start_time,
         checkpoint.global_step,
     )
 
