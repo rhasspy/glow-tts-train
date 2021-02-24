@@ -142,13 +142,6 @@ def main():
 
     assert config.model.num_symbols > 0, "No symbols"
 
-    # Save config
-    if not args.config.is_file():
-        with open(args.config, "w") as config_file:
-            config.save(config_file)
-
-        _LOGGER.debug("Saved config to %s", args.config)
-
     # Create data loader
     dataset = PhonemeMelLoader(id_phonemes, id_mels)
     collate_fn = PhonemeMelCollate()
