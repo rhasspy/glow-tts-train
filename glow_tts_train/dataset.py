@@ -1,11 +1,16 @@
 """Classes and methods for loading phonemes and mel spectrograms"""
 import csv
 import json
+import logging
 import random
 import typing
+from pathlib import Path
 
+import numpy as np
 import torch
 import torch.utils.data
+
+_LOGGER = logging.getLogger("glow_tts_train.dataset")
 
 
 class PhonemeMelLoader(torch.utils.data.Dataset):
@@ -13,19 +18,40 @@ class PhonemeMelLoader(torch.utils.data.Dataset):
         self,
         id_phonemes: typing.Dict[str, torch.IntTensor],
         id_mels: typing.Dict[str, torch.FloatTensor],
+        mels_dir: typing.Optional[typing.Union[str, Path]] = None,
     ):
         self.id_phonemes = id_phonemes
         self.id_mels = id_mels
+        self.mels_dir = Path(mels_dir) if mels_dir else None
 
-        self.ids = list(set.intersection(set(id_phonemes.keys()), set(id_mels.keys())))
-        assert self.ids, "No shared utterance ids between phonemes and mels"
+        if self.id_mels:
+            self.ids = list(
+                set.intersection(set(id_phonemes.keys()), set(id_mels.keys()))
+            )
+            assert self.ids, "No shared utterance ids between phonemes and mels"
+        else:
+            # Assume all ids will be present in mels_dir
+            self.ids = list(id_phonemes.keys())
+
         random.shuffle(self.ids)
 
     def __getitem__(self, index):
         utt_id = self.ids[index]
+        text = self.id_phonemes[utt_id]
+        mel = self.id_mels.get(utt_id)
 
-        # phonemes, mels
-        return (self.id_phonemes[utt_id], self.id_mels[utt_id])
+        if mel is None:
+            assert self.mels_dir, f"Missing mel for id {utt_id}, but no mels_dir"
+            mel_path = self.mels_dir / (utt_id + ".npy")
+
+            # TODO: Verify shape
+            mel = torch.FloatTensor(np.load(mel_path, allow_pickle=True))
+
+            # Cache mel
+            self.id_mels[utt_id] = mel
+
+        # phonemes, mels, lengths
+        return (text, mel, len(text))
 
     def __len__(self):
         return len(self.ids)
