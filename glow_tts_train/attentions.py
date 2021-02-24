@@ -59,17 +59,8 @@ class Encoder(nn.Module):
             )
             self.norm_layers_2.append(LayerNorm(hidden_channels))
 
-    def forward(self, x, x_mask):
+    def forward(self, x: torch.Tensor, x_mask: torch.Tensor):
         attn_mask = x_mask.unsqueeze(2) * x_mask.unsqueeze(-1)
-        # for i in range(self.n_layers):
-        #     x = x * x_mask
-        #     y = self.attn_layers[i](x, x, attn_mask)
-        #     y = self.drop(y)
-        #     x = self.norm_layers_1[i](x + y)
-
-        #     y = self.ffn_layers[i](x, x_mask)
-        #     y = self.drop(y)
-        #     x = self.norm_layers_2[i](x + y)
         for attn_layer, norm_layer_1, ffn_layer, norm_layer_2 in zip(
             self.attn_layers, self.norm_layers_1, self.ffn_layers, self.norm_layers_2
         ):
@@ -88,14 +79,14 @@ class Encoder(nn.Module):
 class CouplingBlock(nn.Module):
     def __init__(
         self,
-        in_channels,
-        hidden_channels,
-        kernel_size,
-        dilation_rate,
-        n_layers,
-        gin_channels=0,
-        p_dropout=0,
-        sigmoid_scale=False,
+        in_channels: int,
+        hidden_channels: int,
+        kernel_size: int,
+        dilation_rate: int,
+        n_layers: int,
+        gin_channels: int = 0,
+        p_dropout: float = 0.0,
+        sigmoid_scale: bool = False,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -110,14 +101,8 @@ class CouplingBlock(nn.Module):
         start = torch.nn.Conv1d(in_channels // 2, hidden_channels, 1)
         start = torch.nn.utils.weight_norm(start)
         self.start = start
-        # Initializing last layer to 0 makes the affine coupling layers
-        # do nothing at first.  It helps to stabilze training.
-        end = torch.nn.Conv1d(hidden_channels, in_channels, 1)
-        end.weight.data.zero_()
-        end.bias.data.zero_()
-        self.end = end
 
-        self.wn = WN(
+        wn = WN(
             in_channels,
             hidden_channels,
             kernel_size,
@@ -126,6 +111,18 @@ class CouplingBlock(nn.Module):
             gin_channels,
             p_dropout,
         )
+
+        self.wn = wn
+
+        # Initializing last layer to 0 makes the affine coupling layers
+        # do nothing at first.  It helps to stabilze training.
+        end = torch.nn.Conv1d(hidden_channels, in_channels, 1)
+        end.weight.data.zero_()
+
+        assert end.bias is not None
+        end.bias.data.zero_()
+
+        self.end = end
 
     def forward(
         self,
@@ -158,7 +155,7 @@ class CouplingBlock(nn.Module):
         z = torch.cat([z_0, z_1], 1)
         return z, logdet
 
-    def store_inverse(self):
+    def store_inverse(self) -> None:
         self.wn.remove_weight_norm()
 
 
@@ -218,7 +215,12 @@ class MultiHeadAttention(nn.Module):
             self.conv_k.bias.data.copy_(self.conv_q.bias.data)
         nn.init.xavier_uniform_(self.conv_v.weight)
 
-    def forward(self, x, c, attn_mask: typing.Optional[torch.Tensor] = None):
+    def forward(
+        self,
+        x: torch.Tensor,
+        c: torch.Tensor,
+        attn_mask: typing.Optional[torch.Tensor] = None,
+    ):
         q = self.conv_q(x)
         k = self.conv_k(c)
         v = self.conv_v(c)
@@ -229,7 +231,13 @@ class MultiHeadAttention(nn.Module):
         x = self.conv_o(x)
         return x
 
-    def attention(self, query, key, value, mask: typing.Optional[torch.Tensor] = None):
+    def attention(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        mask: typing.Optional[torch.Tensor] = None,
+    ) -> typing.Tuple[torch.Tensor, torch.Tensor]:
         # reshape [b, d, t] -> [b, n_h, t, d_k]
         assert len(key.size()) == 3
         b, d, t_s = key.size()
@@ -241,16 +249,16 @@ class MultiHeadAttention(nn.Module):
 
         scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.k_channels)
         if self.window_size is not None:
-            assert (
-                t_s == t_t
-            ), "Relative attention is only available for self-attention."
+            # assert (
+            #     t_s == t_t
+            # ), "Relative attention is only available for self-attention."
             key_relative_embeddings = self._get_relative_embeddings(self.emb_rel_k, t_s)
             rel_logits = self._matmul_with_relative_keys(query, key_relative_embeddings)
             rel_logits = self._relative_position_to_absolute_position(rel_logits)
             scores_local = rel_logits / math.sqrt(self.k_channels)
             scores = scores + scores_local
         if self.proximal_bias:
-            assert t_s == t_t, "Proximal bias is only available for self-attention."
+            # assert t_s == t_t, "Proximal bias is only available for self-attention."
             scores = scores + self._attention_bias_proximal(t_s).to(
                 device=scores.device, dtype=scores.dtype
             )
@@ -281,7 +289,7 @@ class MultiHeadAttention(nn.Module):
         )  # [b, n_h, t_t, d_k] -> [b, d, t_t]
         return output, p_attn
 
-    def _matmul_with_relative_values(self, x, y):
+    def _matmul_with_relative_values(self, x: torch.Tensor, y: torch.Tensor):
         """
     x: [b, h, l, m]
     y: [h or 1, m, d]
@@ -290,7 +298,7 @@ class MultiHeadAttention(nn.Module):
         ret = torch.matmul(x, y.unsqueeze(0))
         return ret
 
-    def _matmul_with_relative_keys(self, x, y):
+    def _matmul_with_relative_keys(self, x: torch.Tensor, y: torch.Tensor):
         """
     x: [b, h, l, d]
     y: [h or 1, m, d]
@@ -299,11 +307,12 @@ class MultiHeadAttention(nn.Module):
         ret = torch.matmul(x, y.unsqueeze(0).transpose(-2, -1))
         return ret
 
-    def _get_relative_embeddings(self, relative_embeddings, length: int):
+    def _get_relative_embeddings(self, relative_embeddings: torch.Tensor, length: int):
         # max_relative_position = 2 * self.window_size + 1
         # Pad first before slice to avoid using cond ops.
-        pad_length = max(length - (self.window_size + 1), 0)
-        slice_start_position = max((self.window_size + 1) - length, 0)
+        # assert self.window_size is not None
+        pad_length = max(length - (self.window_size + 1), 0)  # type: ignore
+        slice_start_position = max((self.window_size + 1) - length, 0)  # type: ignore
         slice_end_position = slice_start_position + 2 * length - 1
         if pad_length > 0:
             padded_relative_embeddings = F.pad(
@@ -317,7 +326,7 @@ class MultiHeadAttention(nn.Module):
         ]
         return used_relative_embeddings
 
-    def _relative_position_to_absolute_position(self, x):
+    def _relative_position_to_absolute_position(self, x: torch.Tensor) -> torch.Tensor:
         """
     x: [b, h, l, 2*l-1]
     ret: [b, h, l, l]
@@ -336,7 +345,7 @@ class MultiHeadAttention(nn.Module):
         ]
         return x_final
 
-    def _absolute_position_to_relative_position(self, x):
+    def _absolute_position_to_relative_position(self, x: torch.Tensor) -> torch.Tensor:
         """
     x: [b, h, l, l]
     ret: [b, h, l, 2*l-1]
@@ -344,15 +353,13 @@ class MultiHeadAttention(nn.Module):
         batch, heads, length, _ = x.size()
         # padd along column
         x = F.pad(x, convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, length - 1]]))
-        x_flat = x.view(
-            [int(batch), int(heads), int(length ** 2 + length * (length - 1))]
-        )
+        x_flat = x.view([batch, heads, length ** 2 + length * (length - 1)])
         # add 0's in the beginning that will skew the elements after reshape
         x_flat = F.pad(x_flat, convert_pad_shape([[0, 0], [0, 0], [length, 0]]))
         x_final = x_flat.view([batch, heads, length, 2 * length])[:, :, :, 1:]
         return x_final
 
-    def _attention_bias_proximal(self, length: int):
+    def _attention_bias_proximal(self, length: int) -> torch.Tensor:
         """Bias for self-attention to encourage attention to close positions.
     Args:
       length: an integer scalar.
@@ -390,7 +397,7 @@ class FFN(nn.Module):
         )
         self.drop = nn.Dropout(p_dropout)
 
-    def forward(self, x, x_mask):
+    def forward(self, x: torch.Tensor, x_mask: torch.Tensor):
         x = self.conv_1(x * x_mask)
         if self.activation == "gelu":
             x = x * torch.sigmoid(1.702 * x)

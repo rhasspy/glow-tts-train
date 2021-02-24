@@ -1,3 +1,4 @@
+import logging
 import math
 import typing
 
@@ -12,11 +13,15 @@ from .layers import ActNorm, ConvReluNorm, InvConvNear, LayerNorm
 from .optimize import OptimizerType
 from .utils import generate_path, sequence_mask, squeeze, unsqueeze
 
+_LOGGER = logging.getLogger("test")
+
 # -----------------------------------------------------------------------------
 
 
 class DurationPredictor(nn.Module):
-    def __init__(self, in_channels, filter_channels, kernel_size, p_dropout):
+    def __init__(
+        self, in_channels: int, filter_channels: int, kernel_size: int, p_dropout: float
+    ):
         super().__init__()
 
         self.in_channels = in_channels
@@ -51,20 +56,20 @@ class DurationPredictor(nn.Module):
 class TextEncoder(nn.Module):
     def __init__(
         self,
-        n_vocab,
-        out_channels,
-        hidden_channels,
-        filter_channels,
-        filter_channels_dp,
-        n_heads,
-        n_layers,
-        kernel_size,
-        p_dropout,
-        window_size=None,
-        block_length=None,
+        n_vocab: int,
+        out_channels: int,
+        hidden_channels: int,
+        filter_channels: int,
+        filter_channels_dp: int,
+        n_heads: int,
+        n_layers: int,
+        kernel_size: int,
+        p_dropout: float,
+        window_size: typing.Optional[int] = None,
+        block_length: typing.Optional[int] = None,
         mean_only=False,
-        prenet=False,
-        gin_channels=0,
+        prenet: bool = False,
+        gin_channels: int = 0,
     ):
 
         super().__init__()
@@ -109,7 +114,9 @@ class TextEncoder(nn.Module):
 
         self.proj_m = nn.Conv1d(hidden_channels, out_channels, 1)
 
-        self.proj_s: typing.Optional[typing.Callable[torch.Tensor, torch.Tensor]] = None
+        self.proj_s: typing.Optional[
+            typing.Callable[[torch.Tensor], torch.Tensor]
+        ] = None
         if not mean_only:
             self.proj_s = nn.Conv1d(hidden_channels, out_channels, 1)
         self.proj_w = DurationPredictor(
@@ -145,17 +152,17 @@ class TextEncoder(nn.Module):
 class FlowSpecDecoder(nn.Module):
     def __init__(
         self,
-        in_channels,
-        hidden_channels,
-        kernel_size,
-        dilation_rate,
-        n_blocks,
-        n_layers,
-        p_dropout=0.0,
-        n_split=4,
-        n_sqz=2,
-        sigmoid_scale=False,
-        gin_channels=0,
+        in_channels: int,
+        hidden_channels: int,
+        kernel_size: int,
+        dilation_rate: int,
+        n_blocks: int,
+        n_layers: int,
+        p_dropout: float = 0.0,
+        n_split: int = 4,
+        n_sqz: int = 2,
+        sigmoid_scale: bool = False,
+        gin_channels: int = 0,
     ):
         super().__init__()
 
@@ -209,8 +216,27 @@ class FlowSpecDecoder(nn.Module):
                 assert logdet is not None
                 logdet_tot += logdet
         else:
+            # Run flows in the opposite direction.
             for f in self.flows[::-1]:
                 x, _logdet = f.forward(x, x_mask, g=g, reverse=reverse)
+
+            # This is a horrible hack to support TorchScript.
+            # We really want to iterate over self.flows[::-1], but this doesn't
+            # work correctly for some reason in TorchScript.
+            #
+            # We also can't use a Python list to store the flows in reverse
+            # order in __init__ for some other reason.
+            #
+            # We ALSO can't index into an nn.ModuleList with a variable for yet
+            # another reason! BUT, we can enumerate over one.
+            #
+            # So, we have this ridiculousness: iterate backwards over flow
+            # indexes. Enumerate forwards over flows. Match indexes and waste
+            # CPU time.
+            # for i in range(len(self.flows) - 1, -1, -1):
+            #     for j, f in enumerate(self.flows):
+            #         if j == i:
+            #             x, _logdet = f.forward(x, x_mask, g=g, reverse=reverse)
 
         if self.n_sqz > 1:
             x, x_mask = unsqueeze(x, x_mask, self.n_sqz)
@@ -276,7 +302,9 @@ class FlowGenerator(nn.Module):
         self.block_length = block_length
         self.mean_only = mean_only
         self.hidden_channels_enc = hidden_channels_enc
-        self.hidden_channels_dec = hidden_channels_dec
+        self.hidden_channels_dec = (
+            hidden_channels if (hidden_channels_dec is None) else hidden_channels_dec
+        )
         self.prenet = prenet
 
         self.encoder = TextEncoder(
@@ -297,12 +325,12 @@ class FlowGenerator(nn.Module):
         )
 
         self.decoder = FlowSpecDecoder(
-            out_channels,
-            hidden_channels_dec or hidden_channels,
-            kernel_size_dec,
-            dilation_rate,
-            n_blocks_dec,
-            n_block_layers,
+            in_channels=out_channels,
+            hidden_channels=self.hidden_channels_dec,
+            kernel_size=kernel_size_dec,
+            dilation_rate=dilation_rate,
+            n_blocks=n_blocks_dec,
+            n_layers=n_block_layers,
             p_dropout=p_dropout_dec,
             n_split=n_split,
             n_sqz=n_sqz,
@@ -310,19 +338,21 @@ class FlowGenerator(nn.Module):
             gin_channels=gin_channels,
         )
 
-        self.emb_g: typing.Optional[typing.Callable[torch.Tensor, torch.Tensor]] = None
+        self.emb_g: typing.Optional[
+            typing.Callable[[torch.Tensor], torch.Tensor]
+        ] = None
         if n_speakers > 1:
             self.emb_g = nn.Embedding(n_speakers, gin_channels)
+            assert self.emb_g is not None
             nn.init.uniform_(self.emb_g.weight, -0.1, 0.1)
 
     def forward(
         self,
         x: torch.Tensor,
         x_lengths: torch.Tensor,
-        y: typing.Optional[torch.Tensor] = None,
-        y_lengths: typing.Optional[torch.Tensor] = None,
+        y: torch.Tensor,
+        y_lengths: torch.Tensor,
         g: typing.Optional[torch.Tensor] = None,
-        gen: bool = False,
         noise_scale: float = 1.0,
         length_scale: float = 1.0,
     ):
@@ -332,13 +362,68 @@ class FlowGenerator(nn.Module):
 
         x_m, x_logs, logw, x_mask = self.encoder(x, x_lengths, g=g)
 
+        y_max_length = y.size(2)
+
+        y, y_lengths, y_max_length = self.preprocess(y, y_lengths, y_max_length)
+        z_mask = torch.unsqueeze(sequence_mask(y_lengths, y_max_length), 1).to(
+            x_mask.dtype
+        )
+        attn_mask = torch.unsqueeze(x_mask, -1) * torch.unsqueeze(z_mask, 2)
+
+        z, logdet = self.decoder(y, z_mask, g=g, reverse=False)
+        with torch.no_grad():
+            x_s_sq_r = torch.exp(-2 * x_logs)
+            logp1 = torch.sum(-0.5 * math.log(2 * math.pi) - x_logs, [1]).unsqueeze(
+                -1
+            )  # [b, t, 1]
+            logp2 = torch.matmul(
+                x_s_sq_r.transpose(1, 2), -0.5 * (z ** 2)
+            )  # [b, t, d] x [b, d, t'] = [b, t, t']
+            logp3 = torch.matmul(
+                (x_m * x_s_sq_r).transpose(1, 2), z
+            )  # [b, t, d] x [b, d, t'] = [b, t, t']
+            logp4 = torch.sum(-0.5 * (x_m ** 2) * x_s_sq_r, [1]).unsqueeze(
+                -1
+            )  # [b, t, 1]
+            logp = logp1 + logp2 + logp3 + logp4  # [b, t, t']
+
+            attn = (
+                monotonic_align.maximum_path(logp, attn_mask.squeeze(1))
+                .unsqueeze(1)
+                .detach()
+            )
+        z_m = torch.matmul(
+            attn.squeeze(1).transpose(1, 2), x_m.transpose(1, 2)
+        ).transpose(
+            1, 2
+        )  # [b, t', t], [b, t, d] -> [b, d, t']
+        z_logs = torch.matmul(
+            attn.squeeze(1).transpose(1, 2), x_logs.transpose(1, 2)
+        ).transpose(
+            1, 2
+        )  # [b, t', t], [b, t, d] -> [b, d, t']
+        logw_ = torch.log(1e-8 + torch.sum(attn, -1)) * x_mask
+
+        return (
+            (z, z_m, z_logs, logdet, z_mask),
+            (x_m, x_logs, x_mask),
+            (attn, logw, logw_),
+        )
+
+    def infer(
+        self,
+        x: torch.Tensor,
+        x_lengths: torch.Tensor,
+        noise_scale: float = 0.667,
+        length_scale: float = 1.0,
+    ):
+        x_m, x_logs, logw, x_mask = self.encoder(x, x_lengths)
+
         w = torch.exp(logw) * x_mask * length_scale
         w_ceil = torch.ceil(w)
         y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
-        y_max_length = None
 
-        assert y_lengths is not None
-        y, y_lengths, y_max_length = self.preprocess(y, y_lengths, y_max_length)
+        y, y_lengths, y_max_length = self.preprocess(None, y_lengths, None)
         z_mask = torch.unsqueeze(sequence_mask(y_lengths, y_max_length), 1).to(
             x_mask.dtype
         )
@@ -355,114 +440,11 @@ class FlowGenerator(nn.Module):
         ).transpose(
             1, 2
         )  # [b, t', t], [b, t, d] -> [b, d, t']
-        logw_ = torch.log(1e-8 + torch.sum(attn, -1)) * x_mask
 
-        z = (z_m + torch.exp(z_logs) * torch.randn_like(z_m) * noise_scale) * z_mask
-        y, logdet = self.decoder(z, z_mask, g=g, reverse=True)
+        z = (z_m + (torch.exp(z_logs) * torch.randn_like(z_m) * noise_scale)) * z_mask
+        y, _ = self.decoder(z, z_mask, reverse=True)
 
-        return (
-            (y, z_m, z_logs, logdet, z_mask),
-            (x_m, x_logs, x_mask),
-            (attn, logw, logw_),
-        )
-
-    # def forward(
-    #     self,
-    #     x: torch.Tensor,
-    #     x_lengths: torch.Tensor,
-    #     y: typing.Optional[torch.Tensor] = None,
-    #     y_lengths: typing.Optional[torch.Tensor] = None,
-    #     g: typing.Optional[torch.Tensor] = None,
-    #     gen: bool = False,
-    #     noise_scale: float = 1.0,
-    #     length_scale: float = 1.0,
-    # ):
-    #     if g is not None:
-    #         assert self.emb_g is not None
-    #         g = F.normalize(self.emb_g(g)).unsqueeze(-1)  # [b, h]
-
-    #     x_m, x_logs, logw, x_mask = self.encoder(x, x_lengths, g=g)
-
-    #     w_ceil: typing.Optional[torch.Tensor] = None
-    #     if gen:
-    #         w = torch.exp(logw) * x_mask * length_scale
-    #         w_ceil = torch.ceil(w)
-    #         y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
-    #         y_max_length = None
-    #     else:
-    #         assert y is not None
-    #         y_max_length = y.size(2)
-
-    #     assert y_lengths is not None
-    #     y, y_lengths, y_max_length = self.preprocess(y, y_lengths, y_max_length)
-    #     z_mask = torch.unsqueeze(sequence_mask(y_lengths, y_max_length), 1).to(
-    #         x_mask.dtype
-    #     )
-    #     attn_mask = torch.unsqueeze(x_mask, -1) * torch.unsqueeze(z_mask, 2)
-
-    #     if gen:
-    #         assert w_ceil is not None
-    #         attn = generate_path(w_ceil.squeeze(1), attn_mask.squeeze(1)).unsqueeze(1)
-    #         z_m = torch.matmul(
-    #             attn.squeeze(1).transpose(1, 2), x_m.transpose(1, 2)
-    #         ).transpose(
-    #             1, 2
-    #         )  # [b, t', t], [b, t, d] -> [b, d, t']
-    #         z_logs = torch.matmul(
-    #             attn.squeeze(1).transpose(1, 2), x_logs.transpose(1, 2)
-    #         ).transpose(
-    #             1, 2
-    #         )  # [b, t', t], [b, t, d] -> [b, d, t']
-    #         logw_ = torch.log(1e-8 + torch.sum(attn, -1)) * x_mask
-
-    #         z = (z_m + torch.exp(z_logs) * torch.randn_like(z_m) * noise_scale) * z_mask
-    #         y, logdet = self.decoder(z, z_mask, g=g, reverse=True)
-    #         return (
-    #             (y, z_m, z_logs, logdet, z_mask),
-    #             (x_m, x_logs, x_mask),
-    #             (attn, logw, logw_),
-    #         )
-
-    #     assert y is not None
-    #     z, logdet = self.decoder(y, z_mask, g=g, reverse=False)
-    #     with torch.no_grad():
-    #         x_s_sq_r = torch.exp(-2 * x_logs)
-    #         logp1 = torch.sum(-0.5 * math.log(2 * math.pi) - x_logs, [1]).unsqueeze(
-    #             -1
-    #         )  # [b, t, 1]
-    #         logp2 = torch.matmul(
-    #             x_s_sq_r.transpose(1, 2), -0.5 * (z ** 2)
-    #         )  # [b, t, d] x [b, d, t'] = [b, t, t']
-    #         logp3 = torch.matmul(
-    #             (x_m * x_s_sq_r).transpose(1, 2), z
-    #         )  # [b, t, d] x [b, d, t'] = [b, t, t']
-    #         logp4 = torch.sum(-0.5 * (x_m ** 2) * x_s_sq_r, [1]).unsqueeze(
-    #             -1
-    #         )  # [b, t, 1]
-    #         logp = logp1 + logp2 + logp3 + logp4  # [b, t, t']
-
-    #         attn = (
-    #             monotonic_align.maximum_path(logp, attn_mask.squeeze(1))
-    #             .unsqueeze(1)
-    #             .detach()
-    #         )
-    #     z_m = torch.matmul(
-    #         attn.squeeze(1).transpose(1, 2), x_m.transpose(1, 2)
-    #     ).transpose(
-    #         1, 2
-    #     )  # [b, t', t], [b, t, d] -> [b, d, t']
-    #     z_logs = torch.matmul(
-    #         attn.squeeze(1).transpose(1, 2), x_logs.transpose(1, 2)
-    #     ).transpose(
-    #         1, 2
-    #     )  # [b, t', t], [b, t, d] -> [b, d, t']
-    #     logw_ = torch.log(1e-8 + torch.sum(attn, -1)) * x_mask
-
-    #     return (
-    #         (z, z_m, z_logs, logdet, z_mask),
-    #         (x_m, x_logs, x_mask),
-    #         (attn, logw, logw_),
-    #     )
+        return y
 
     def preprocess(
         self,

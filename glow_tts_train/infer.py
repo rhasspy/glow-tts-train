@@ -31,6 +31,7 @@ def main():
     parser.add_argument("--noise-scale", type=float, default=0.667)
     parser.add_argument("--length-scale", type=float, default=1.0)
     parser.add_argument("--cuda", action="store_true", help="Use GPU for inference")
+    parser.add_argument("--jit", action="store_true", help="Load TorchScript model")
     parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to the console"
     )
@@ -86,21 +87,40 @@ def main():
 
     # Load checkpoint
     start_time = time.perf_counter()
-    _LOGGER.debug("Loading checkpoint from %s", args.checkpoint)
-    checkpoint = load_checkpoint(args.checkpoint, config, use_cuda=args.cuda)
-    end_time = time.perf_counter()
 
-    model, _ = checkpoint.model, checkpoint.optimizer
-    _LOGGER.info(
-        "Loaded checkpoint from %s in %s second(s) (global step=%s)",
-        args.checkpoint,
-        end_time - start_time,
-        checkpoint.global_step,
-    )
+    if args.jit:
+        # TorchScript model
+        _LOGGER.debug("Loading TorchScript from %s", args.checkpoint)
+        model = torch.jit.load(str(args.checkpoint))
+        end_time = time.perf_counter()
 
-    # Do not calcuate jacobians for fast decoding
-    model.decoder.store_inverse()
-    model.eval()
+        _LOGGER.info(
+            "Loaded TorchScript model from %s in %s second(s)",
+            args.checkpoint,
+            end_time - start_time,
+        )
+
+        model.eval()
+    else:
+        # Checkpoint
+        _LOGGER.debug("Loading checkpoint from %s", args.checkpoint)
+        checkpoint = load_checkpoint(args.checkpoint, config, use_cuda=args.cuda)
+        end_time = time.perf_counter()
+
+        model, _ = checkpoint.model, checkpoint.optimizer
+        _LOGGER.info(
+            "Loaded checkpoint from %s in %s second(s) (global step=%s)",
+            args.checkpoint,
+            end_time - start_time,
+            checkpoint.global_step,
+        )
+
+        # Do not calcuate jacobians for fast decoding
+        model.decoder.store_inverse()
+        model.eval()
+
+        # Inference only
+        model.forward = model.infer
 
     if os.isatty(sys.stdin.fileno()):
         print("Reading whitespace-separated phoneme ids from stdin...", file=sys.stderr)
@@ -135,24 +155,27 @@ def main():
             # Infer mel spectrograms
             with torch.no_grad():
                 start_time = time.perf_counter()
-                (mel, *_), *_, (_attn_gen, *_) = model(
+                mel = model(
                     text,
                     text_lengths,
-                    gen=True,
                     noise_scale=args.noise_scale,
                     length_scale=args.length_scale,
                 )
                 end_time = time.perf_counter()
 
                 # Write mel spectrogram and settings as a JSON object on one line
-                mel_list = mel.squeeze(0).cpu().float().numpy().tolist()
+                mel = mel.squeeze(0).cpu().float()
+                mel_list = mel.numpy().tolist()
                 output_obj["id"] = utt_id
                 output_obj["mel"] = mel_list
 
                 writer.write(output_obj)
 
                 _LOGGER.debug(
-                    "Generated mel in %s second(s) (%s)", end_time - start_time, utt_id
+                    "Generated mel in %s second(s) (%s, shape=%s)",
+                    end_time - start_time,
+                    utt_id,
+                    list(mel.shape),
                 )
     except KeyboardInterrupt:
         pass

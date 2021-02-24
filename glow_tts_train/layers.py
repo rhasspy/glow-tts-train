@@ -8,7 +8,7 @@ from .utils import fused_add_tanh_sigmoid_multiply
 
 
 class LayerNorm(nn.Module):
-    def __init__(self, channels, eps=1e-4):
+    def __init__(self, channels: int, eps: float = 1e-4):
         super().__init__()
         self.channels = channels
         self.eps = eps
@@ -16,7 +16,7 @@ class LayerNorm(nn.Module):
         self.gamma = nn.Parameter(torch.ones(channels))
         self.beta = nn.Parameter(torch.zeros(channels))
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor):
         n_dims = len(x.shape)
         mean = torch.mean(x, 1, keepdim=True)
         variance = torch.mean((x - mean) ** 2, 1, keepdim=True)
@@ -69,14 +69,12 @@ class ConvReluNorm(nn.Module):
             self.norm_layers.append(LayerNorm(hidden_channels))
         self.proj = nn.Conv1d(hidden_channels, out_channels, 1)
         self.proj.weight.data.zero_()
+
+        assert self.proj.bias is not None
         self.proj.bias.data.zero_()
 
     def forward(self, x, x_mask):
         x_org = x
-        # for i in range(self.n_layers):
-        #     x = self.conv_layers[i](x * x_mask)
-        #     x = self.norm_layers[i](x)
-        #     x = self.relu_drop(x)
         for conv_layer, norm_layer in zip(self.conv_layers, self.norm_layers):
             x = conv_layer(x * x_mask)
             x = norm_layer(x)
@@ -112,7 +110,7 @@ class WN(torch.nn.Module):
         self.drop = nn.Dropout(p_dropout)
 
         self.cond_layer: typing.Optional[
-            typing.Callable[torch.Tensor, torch.Tensor]
+            typing.Callable[[torch.Tensor], torch.Tensor]
         ] = None
 
         if gin_channels != 0:
@@ -144,15 +142,21 @@ class WN(torch.nn.Module):
             res_skip_layer = torch.nn.utils.weight_norm(res_skip_layer, name="weight")
             self.res_skip_layers.append(res_skip_layer)
 
+        self.n_channels_tensor = torch.tensor(  # pylint: disable=not-callable
+            [self.hidden_channels]
+        )
+
     def forward(
         self,
         x: torch.Tensor,
         x_mask: typing.Optional[torch.Tensor] = None,
         g: typing.Optional[torch.Tensor] = None,
     ):
-        assert x_mask is not None
+        # assert x_mask is not None
         output = torch.zeros_like(x)
-        n_channels_tensor = torch.tensor([self.hidden_channels])
+        # n_channels_tensor = torch.tensor(  # pylint: disable=not-callable
+        #     [self.hidden_channels]
+        # )
 
         if g is not None:
             assert self.cond_layer is not None
@@ -169,7 +173,7 @@ class WN(torch.nn.Module):
             else:
                 g_l = torch.zeros_like(x_in)
 
-            acts = fused_add_tanh_sigmoid_multiply(x_in, g_l, n_channels_tensor)
+            acts = fused_add_tanh_sigmoid_multiply(x_in, g_l, self.n_channels_tensor)
 
             res_skip_acts = res_skip_layer(acts)
             if i < self.n_layers - 1:
@@ -183,10 +187,12 @@ class WN(torch.nn.Module):
     def remove_weight_norm(self):
         if self.gin_channels != 0:
             torch.nn.utils.remove_weight_norm(self.cond_layer)
-        for l in self.in_layers:
-            torch.nn.utils.remove_weight_norm(l)
-        for l in self.res_skip_layers:
-            torch.nn.utils.remove_weight_norm(l)
+
+        for in_layer in self.in_layers:
+            torch.nn.utils.remove_weight_norm(in_layer)
+
+        for skip_layer in self.res_skip_layers:
+            torch.nn.utils.remove_weight_norm(skip_layer)
 
 
 class ActNorm(nn.Module):
@@ -268,7 +274,7 @@ class InvConvNear(nn.Module):
         g: typing.Optional[torch.Tensor] = None,
     ):
         b, c, t = x.size()
-        assert c % self.n_split == 0
+        # assert c % self.n_split == 0
         if x_mask is None:
             x_mask = torch.ones_like(x)
             x_len = torch.ones((b,), dtype=x.dtype, device=x.device) * t
@@ -302,5 +308,5 @@ class InvConvNear(nn.Module):
         z = z.permute(0, 1, 3, 2, 4).contiguous().view(b, c, t) * x_mask
         return z, logdet
 
-    def store_inverse(self):
+    def store_inverse(self) -> None:
         self.weight_inv = torch.inverse(self.weight.float()).to(dtype=self.weight.dtype)

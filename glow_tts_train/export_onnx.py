@@ -8,20 +8,21 @@ import torch
 from .checkpoint import load_checkpoint
 from .config import TrainingConfig
 
-_LOGGER = logging.getLogger("glow_tts_train.export")
+_LOGGER = logging.getLogger("glow_tts_train.export_onnx")
+
+OPSET_VERSION = 12
+
+# -----------------------------------------------------------------------------
 
 
 def main():
     """Main entry point"""
-    torch.manual_seed(1234)
-
-    parser = argparse.ArgumentParser(prog="glow-tts-train.export")
+    parser = argparse.ArgumentParser(prog="glow-tts-export-onnx")
     parser.add_argument("checkpoint", help="Path to model checkpoint (.pth)")
-    parser.add_argument("output", help="Path to output model (.pth)")
+    parser.add_argument("output", help="Path to output onnx model")
     parser.add_argument(
         "--config", action="append", help="Path to JSON configuration file(s)"
     )
-
     parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to the console"
     )
@@ -51,7 +52,7 @@ def main():
 
     # Load checkpoint
     _LOGGER.debug("Loading checkpoint from %s", args.checkpoint)
-    checkpoint = load_checkpoint(args.checkpoint, config, use_cuda=False)
+    checkpoint = load_checkpoint(args.checkpoint, config)
     model = checkpoint.model
 
     _LOGGER.info(
@@ -60,22 +61,46 @@ def main():
         checkpoint.global_step,
     )
 
-    # Create output directory
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-
+    # Inference only
     model.eval()
 
     # Do not calcuate jacobians for fast decoding
     with torch.no_grad():
         model.decoder.store_inverse()
 
-    # Inference only
-    model.forward = model.infer
+    model.forward = lambda a, b, c: model.infer(
+        a, b, noise_scale=c[0], length_scale=c[1]
+    )
 
-    jitted_model = torch.jit.script(model)
-    torch.jit.save(jitted_model, str(args.output))
+    # Create output directory
+    args.output.parent.mkdir(parents=True, exist_ok=True)
 
-    _LOGGER.info("Saved TorchScript model to %s", args.output)
+    # Create dummy input
+    sequences = torch.randint(
+        low=0, high=config.model.num_symbols, size=(1, 50), dtype=torch.long
+    ).cuda()
+    sequence_lengths = torch.IntTensor([sequences.size(1)]).cuda().long()
+    scales = torch.FloatTensor([0.667, 1.0])
+
+    dummy_input = (sequences, sequence_lengths, scales)
+
+    # Export
+    torch.onnx.export(
+        model,
+        dummy_input,
+        str(args.output),
+        opset_version=OPSET_VERSION,
+        do_constant_folding=True,
+        input_names=["input", "input_lengths", "scales"],
+        output_names=["output"],
+        dynamic_axes={
+            "input": {0: "batch_size", 1: "phonemes"},
+            "input_lengths": {0: "batch_size"},
+            "output": {0: "batch_size", 1: "time"},
+        },
+    )
+
+    _LOGGER.info("Exported model to %s", args.output)
 
 
 # -----------------------------------------------------------------------------
