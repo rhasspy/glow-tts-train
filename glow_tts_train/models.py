@@ -446,6 +446,39 @@ class FlowGenerator(nn.Module):
 
         return y
 
+    def alignments(
+        self, x: torch.Tensor, x_lengths: torch.Tensor, length_scale: float = 1.0
+    ):
+        x_m, x_logs, logw, x_mask = self.encoder(x, x_lengths)
+
+        w = torch.exp(logw) * x_mask * length_scale
+        w_ceil = torch.ceil(w)
+        y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
+
+        y, y_lengths, y_max_length = self.preprocess(None, y_lengths, None)
+        z_mask = torch.unsqueeze(sequence_mask(y_lengths, y_max_length), 1).to(
+            x_mask.dtype
+        )
+        attn_mask = torch.unsqueeze(x_mask, -1) * torch.unsqueeze(z_mask, 2)
+
+        attn = generate_path(w_ceil.squeeze(1), attn_mask.squeeze(1)).unsqueeze(1)
+
+        z_m = torch.matmul(
+            attn.squeeze(1).transpose(1, 2), x_m.transpose(1, 2)
+        ).transpose(
+            1, 2
+        )  # [b, t', t], [b, t, d] -> [b, d, t']
+        z_logs = torch.matmul(
+            attn.squeeze(1).transpose(1, 2), x_logs.transpose(1, 2)
+        ).transpose(
+            1, 2
+        )  # [b, t', t], [b, t, d] -> [b, d, t']
+
+        z = (z_m + torch.exp(z_logs)) * z_mask
+        y, _ = self.decoder(z, z_mask, reverse=True)
+
+        return attn, y, y_lengths
+
     def preprocess(
         self,
         y: typing.Optional[torch.Tensor],

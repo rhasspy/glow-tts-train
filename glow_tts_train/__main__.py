@@ -2,11 +2,14 @@
 import argparse
 import logging
 import random
+import sys
 import typing
 from pathlib import Path
 
 import torch
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 from .checkpoint import load_checkpoint
 from .config import TrainingConfig
@@ -26,7 +29,15 @@ def main():
     parser.add_argument(
         "phonemes_csv", help="CSV file with utterance id|phoneme ids lines"
     )
-    parser.add_argument("mels_jsonl", help="JSONL file with mel spectrograms")
+    parser.add_argument(
+        "mels",
+        help="JSONL file with mel spectrograms or directory with .npy files (--mels-dir)",
+    )
+    parser.add_argument(
+        "--mels-dir",
+        action="store_true",
+        help="mels argument is a directory with .npy files",
+    )
     parser.add_argument(
         "--config", action="append", help="Path to JSON configuration file(s)"
     )
@@ -39,6 +50,9 @@ def main():
         type=int,
         default=1,
         help="Number of epochs between checkpoints",
+    )
+    parser.add_argument(
+        "--local_rank", type=int, help="Rank passed from torch.distributed.launch"
     )
     parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to the console"
@@ -56,12 +70,19 @@ def main():
 
     assert torch.cuda.is_available(), "GPU is required for training"
 
+    is_distributed = args.local_rank is not None
+
+    if is_distributed:
+        _LOGGER.info("Setting up distributed run (rank=%s)", args.local_rank)
+        torch.cuda.set_device(args.local_rank)
+        torch.distributed.init_process_group(backend="nccl", init_method="env://")
+
     # -------------------------------------------------------------------------
 
     # Convert to paths
     args.model_dir = Path(args.model_dir)
     args.phonemes_csv = Path(args.phonemes_csv)
-    args.mels_jsonl = Path(args.mels_jsonl)
+    args.mels = Path(args.mels)
 
     if args.config:
         args.config = [Path(p) for p in args.config]
@@ -91,12 +112,29 @@ def main():
     _LOGGER.info("Loaded phonemes for %s utterances", len(id_phonemes))
 
     # Load mels
-    # TODO: Verify audio configuration
-    _LOGGER.debug("Loading mels from %s", args.mels_jsonl)
-    with open(args.mels_jsonl, "r") as mels_file:
-        id_mels = load_mels(mels_file)
+    id_mels = {}
+    if args.mels_dir:
+        _LOGGER.debug("Verifying mels in %s", args.mels)
+        missing_ids = set()
+        for utt_id in id_phonemes:
+            mel_path = args.mels / (utt_id + ".npy")
+            if not mel_path.is_file():
+                missing_ids.add(utt_id)
 
-    _LOGGER.info("Loaded mels for %s utterances", len(id_mels))
+        if missing_ids:
+            _LOGGER.fatal(
+                "Missing .npy files for utterances: %s", sorted(list(missing_ids))
+            )
+            sys.exit(1)
+
+        _LOGGER.info("Verified %s mel(s) in %s", len(id_phonemes), args.mels)
+    else:
+        # TODO: Verify audio configuration
+        _LOGGER.debug("Loading JSONL mels from %s", args.mels)
+        with open(args.mels, "r") as mels_file:
+            id_mels = load_mels(mels_file)
+
+        _LOGGER.info("Loaded mels for %s utterances", len(id_mels))
 
     # Set num_symbols
     if config.model.num_symbols < 1:
@@ -116,13 +154,16 @@ def main():
     collate_fn = PhonemeMelCollate()
 
     batch_size = config.batch_size if args.batch_size is None else args.batch_size
+    sampler = DistributedSampler(dataset) if is_distributed else None
+
     train_loader = DataLoader(
         dataset,
-        shuffle=False,
+        shuffle=(not is_distributed),
         batch_size=batch_size,
         pin_memory=True,
         drop_last=True,
         collate_fn=collate_fn,
+        sampler=sampler,
     )
 
     model: typing.Optional[ModelType] = None
@@ -146,6 +187,11 @@ def main():
         _LOGGER.info("Doing data-dependent initialization...")
         model = initialize_model(train_loader, config)
 
+    if is_distributed:
+        model = DistributedDataParallel(
+            model, device_ids=[args.local_rank], output_device=args.local_rank
+        )
+
     # Train
     _LOGGER.info("Training started (batch size=%s)", batch_size)
 
@@ -158,6 +204,7 @@ def main():
             optimizer=optimizer,
             global_step=global_step,
             checkpoint_epochs=args.checkpoint_epochs,
+            rank=(args.local_rank if is_distributed else 0),
         )
         _LOGGER.info("Training finished")
     except KeyboardInterrupt:
