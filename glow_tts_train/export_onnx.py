@@ -68,9 +68,22 @@ def main():
     with torch.no_grad():
         model.decoder.store_inverse()
 
-    model.forward = lambda a, b, c: model.infer(
-        a, b, noise_scale=c[0], length_scale=c[1]
-    )
+    old_forward = model.forward
+
+    def infer_forward(text, text_lengths, scales):
+        noise_scale = scales[0]
+        length_scale = scales[1]
+        (mel, mel_lengths, *_), _, _ = old_forward(
+            text,
+            text_lengths,
+            gen=True,
+            noise_scale=noise_scale,
+            length_scale=length_scale,
+        )
+
+        return (mel, mel_lengths)
+
+    model.forward = infer_forward
 
     # Create output directory
     args.output.parent.mkdir(parents=True, exist_ok=True)
