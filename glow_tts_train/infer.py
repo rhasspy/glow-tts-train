@@ -120,7 +120,7 @@ def main():
         model.eval()
 
         # Inference only
-        model.forward = model.infer
+        # model.forward = model.infer
 
     if os.isatty(sys.stdin.fileno()):
         print("Reading whitespace-separated phoneme ids from stdin...", file=sys.stderr)
@@ -155,11 +155,12 @@ def main():
             # Infer mel spectrograms
             with torch.no_grad():
                 start_time = time.perf_counter()
-                mel = model(
+                (mel, *_), _, _ = model(
                     text,
                     text_lengths,
                     noise_scale=args.noise_scale,
                     length_scale=args.length_scale,
+                    gen=True,
                 )
                 end_time = time.perf_counter()
 
