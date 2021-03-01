@@ -61,7 +61,7 @@ class TrainingConfig(DataClassJsonMixin):
     warmup_steps: int = 4000
     scheduler: str = "noam"
     batch_size: int = 32
-    fp16_run: bool = True
+    fp16_run: bool = False
     audio: AudioConfig = field(default_factory=AudioConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     version: int = 1
