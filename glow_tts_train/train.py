@@ -38,6 +38,8 @@ def train(
 
     # Gradient scaler
     scaler = GradScaler() if config.fp16_run else None
+    if scaler:
+        _LOGGER.info("Using fp16 scaler")
 
     # Begin training
     for epoch in range(1, config.epochs + 1):
@@ -109,19 +111,20 @@ def train_step(
         # Train model
         optimizer.zero_grad()
 
-        (
-            (z, z_m, z_logs, logdet, z_mask),
-            (_x_m, _x_logs, _x_mask),
-            (_attn, logw, logw_),
-        ) = model(x, x_lengths, y, y_lengths)
+        with autocast(enabled=fp16_run):
+            (
+                (z, z_m, z_logs, logdet, z_mask),
+                (_x_m, _x_logs, _x_mask),
+                (_attn, logw, logw_),
+            ) = model(x, x_lengths, y, y_lengths)
 
-        # Compute loss
-        l_mle = mle_loss(z, z_m, z_logs, logdet, z_mask)
-        l_length = duration_loss(logw, logw_, x_lengths)
+            # Compute loss
+            l_mle = mle_loss(z, z_m, z_logs, logdet, z_mask)
+            l_length = duration_loss(logw, logw_, x_lengths)
 
-        # TODO: Weighted loss
-        # loss_gs = [l_mle, l_length]
-        loss_g = l_mle + l_length
+            # TODO: Weighted loss
+            # loss_gs = [l_mle, l_length]
+            loss_g = l_mle + l_length
 
         all_loss_g.append(loss_g.item())
 
@@ -129,6 +132,7 @@ def train_step(
             # Float16
             assert scaler is not None
             scaler.scale(loss_g).backward()
+            scaler.unscale_(optimizer._optim)
             clip_grad_value_(model.parameters(), config.grad_clip)
 
             scaler.step(optimizer._optim)
