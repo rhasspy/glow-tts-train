@@ -45,6 +45,7 @@ def main():
         "--batch-size", type=int, help="Batch size (default: use config)"
     )
     parser.add_argument("--checkpoint", help="Path to restore checkpoint")
+    parser.add_argument("--git-commit", help="Git commit to store in config")
     parser.add_argument(
         "--checkpoint-epochs",
         type=int,
@@ -96,6 +97,8 @@ def main():
         _LOGGER.debug("Loading configuration(s) from %s", args.config)
         config = TrainingConfig.load_and_merge(config, args.config)
 
+    config.git_commit = args.git_commit
+
     _LOGGER.debug(config)
 
     # Create output directory
@@ -143,7 +146,9 @@ def main():
     assert config.model.num_symbols > 0, "No symbols"
 
     # Create data loader
-    dataset = PhonemeMelLoader(id_phonemes, id_mels)
+    dataset = PhonemeMelLoader(
+        id_phonemes, id_mels, mels_dir=(args.mels if args.mels_dir else None)
+    )
     collate_fn = PhonemeMelCollate()
 
     batch_size = config.batch_size if args.batch_size is None else args.batch_size

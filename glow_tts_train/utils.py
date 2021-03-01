@@ -1,5 +1,4 @@
 import math
-import typing
 
 import numpy as np
 import torch
@@ -39,15 +38,10 @@ def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
     return acts
 
 
-def convert_pad_shape(pad_shape: typing.List[typing.List[int]]) -> typing.List[int]:
-    # pad_shape = [item for sublist in last for item in sublist]
-    pad_shape.reverse()
-    new_pad_shape: typing.List[int] = []
-    for sublist in pad_shape:
-        new_pad_shape.extend(sublist)
-
-    # return pad_shape
-    return new_pad_shape
+def convert_pad_shape(pad_shape):
+    last = pad_shape[::-1]
+    pad_shape = [item for sublist in last for item in sublist]
+    return pad_shape
 
 
 def shift_1d(x):
@@ -55,16 +49,10 @@ def shift_1d(x):
     return x
 
 
-def sequence_mask(
-    length: torch.Tensor,
-    max_length: typing.Optional[typing.Union[int, torch.Tensor]] = None,
-) -> torch.Tensor:
+def sequence_mask(length, max_length=None):
     if max_length is None:
         max_length = length.max()
-
-    x = torch.arange(
-        max_length, dtype=length.dtype, device=length.device  # type: ignore
-    )
+    x = torch.arange(max_length, dtype=length.dtype, device=length.device)
     return x.unsqueeze(0) < length.unsqueeze(1)
 
 
@@ -144,9 +132,7 @@ def clip_grad_value_(parameters, clip_value, norm_type=2):
     return total_norm
 
 
-def squeeze(
-    x: torch.Tensor, x_mask: typing.Optional[torch.Tensor] = None, n_sqz: int = 2
-):
+def squeeze(x, x_mask=None, n_sqz=2):
     b, c, t = x.size()
 
     t = (t // n_sqz) * n_sqz
@@ -161,9 +147,7 @@ def squeeze(
     return x_sqz * x_mask, x_mask
 
 
-def unsqueeze(
-    x: torch.Tensor, x_mask: typing.Optional[torch.Tensor] = None, n_sqz: int = 2
-):
+def unsqueeze(x, x_mask=None, n_sqz=2):
     b, c, t = x.size()
 
     x_unsqz = x.view(b, n_sqz, c // n_sqz, t)
@@ -174,3 +158,7 @@ def unsqueeze(
     else:
         x_mask = torch.ones(b, 1, t * n_sqz).to(device=x.device, dtype=x.dtype)
     return x_unsqz * x_mask, x_mask
+
+
+def to_gpu(x: torch.Tensor) -> torch.Tensor:
+    return x.contiguous().cuda(non_blocking=True)

@@ -8,5 +8,15 @@ if [[ -d "${venv}" ]]; then
     source "${venv}/bin/activate"
 fi
 
+args=()
+
+git_commit="$(git -C "${src_dir}" rev-parse --short HEAD || '')"
+if [[ -n "${git_commit}" ]]; then
+    args+=('--git-commit' "${git_commit}")
+fi
+
+args+=("$@")
+
+
 export PYTHONPATH="${src_dir}:${PYTHONPATH}"
-python3 -m glow_tts_train "$@"
+python3 -m glow_tts_train "${args[@]}"

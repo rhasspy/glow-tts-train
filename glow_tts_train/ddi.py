@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 
 from .config import TrainingConfig
 from .models import ModelType, setup_model
+from .utils import to_gpu
 
 
 class FlowGeneratorDDI(ModelType):
@@ -24,10 +25,10 @@ def initialize_model(train_loader: DataLoader, config: TrainingConfig) -> ModelT
 
     model.train()
     for _batch_idx, (x, x_lengths, y, y_lengths) in enumerate(train_loader):
-        x, x_lengths = x.cuda(), x_lengths.cuda()
-        y, y_lengths = y.cuda(), y_lengths.cuda()
+        x, x_lengths = to_gpu(x), to_gpu(x_lengths)
+        y, y_lengths = to_gpu(y), to_gpu(y_lengths)
 
-        _ = model(x, x_lengths, y, y_lengths, gen=False)
+        _ = model(x, x_lengths, y, y_lengths)
         break
 
     return model

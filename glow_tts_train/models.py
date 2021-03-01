@@ -19,9 +19,7 @@ _LOGGER = logging.getLogger("test")
 
 
 class DurationPredictor(nn.Module):
-    def __init__(
-        self, in_channels: int, filter_channels: int, kernel_size: int, p_dropout: float
-    ):
+    def __init__(self, in_channels, filter_channels, kernel_size, p_dropout):
         super().__init__()
 
         self.in_channels = in_channels
@@ -56,20 +54,20 @@ class DurationPredictor(nn.Module):
 class TextEncoder(nn.Module):
     def __init__(
         self,
-        n_vocab: int,
-        out_channels: int,
-        hidden_channels: int,
-        filter_channels: int,
-        filter_channels_dp: int,
-        n_heads: int,
-        n_layers: int,
-        kernel_size: int,
-        p_dropout: float,
-        window_size: typing.Optional[int] = None,
-        block_length: typing.Optional[int] = None,
+        n_vocab,
+        out_channels,
+        hidden_channels,
+        filter_channels,
+        filter_channels_dp,
+        n_heads,
+        n_layers,
+        kernel_size,
+        p_dropout,
+        window_size=None,
+        block_length=None,
         mean_only=False,
-        prenet: bool = False,
-        gin_channels: int = 0,
+        prenet=False,
+        gin_channels=0,
     ):
 
         super().__init__()
@@ -113,17 +111,13 @@ class TextEncoder(nn.Module):
         )
 
         self.proj_m = nn.Conv1d(hidden_channels, out_channels, 1)
-
-        self.proj_s: typing.Optional[
-            typing.Callable[[torch.Tensor], torch.Tensor]
-        ] = None
         if not mean_only:
             self.proj_s = nn.Conv1d(hidden_channels, out_channels, 1)
         self.proj_w = DurationPredictor(
             hidden_channels + gin_channels, filter_channels_dp, kernel_size, p_dropout
         )
 
-    def forward(self, x, x_lengths, g: typing.Optional[torch.Tensor] = None):
+    def forward(self, x, x_lengths, g=None):
         x = self.emb(x) * math.sqrt(self.hidden_channels)  # [b, t, h]
         x = torch.transpose(x, 1, -1)  # [b, h, t]
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
@@ -140,7 +134,6 @@ class TextEncoder(nn.Module):
 
         x_m = self.proj_m(x) * x_mask
         if not self.mean_only:
-            assert self.proj_s is not None
             x_logs = self.proj_s(x) * x_mask
         else:
             x_logs = torch.zeros_like(x_m)
@@ -152,17 +145,17 @@ class TextEncoder(nn.Module):
 class FlowSpecDecoder(nn.Module):
     def __init__(
         self,
-        in_channels: int,
-        hidden_channels: int,
-        kernel_size: int,
-        dilation_rate: int,
-        n_blocks: int,
-        n_layers: int,
-        p_dropout: float = 0.0,
-        n_split: int = 4,
-        n_sqz: int = 2,
-        sigmoid_scale: bool = False,
-        gin_channels: int = 0,
+        in_channels,
+        hidden_channels,
+        kernel_size,
+        dilation_rate,
+        n_blocks,
+        n_layers,
+        p_dropout=0.0,
+        n_split=4,
+        n_sqz=2,
+        sigmoid_scale=False,
+        gin_channels=0,
     ):
         super().__init__()
 
@@ -197,50 +190,24 @@ class FlowSpecDecoder(nn.Module):
                 )
             )
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        x_mask: torch.Tensor,
-        g: typing.Optional[torch.Tensor] = None,
-        reverse: bool = False,
-    ):
+    def forward(self, x, x_mask, g=None, reverse=False):
+        if not reverse:
+            flows = self.flows
+            logdet_tot = 0
+        else:
+            flows = reversed(self.flows)
+            logdet_tot = None
+
         if self.n_sqz > 1:
             x, x_mask = squeeze(x, x_mask, self.n_sqz)
-
-        logdet_tot: typing.Optional[torch.Tensor] = None
-
-        if not reverse:
-            logdet_tot = torch.zeros(1)
-            for f in self.flows:
+        for f in flows:
+            if not reverse:
                 x, logdet = f(x, x_mask, g=g, reverse=reverse)
-                assert logdet is not None
                 logdet_tot += logdet
-        else:
-            # Run flows in the opposite direction.
-            for f in self.flows[::-1]:
-                x, _logdet = f.forward(x, x_mask, g=g, reverse=reverse)
-
-            # This is a horrible hack to support TorchScript.
-            # We really want to iterate over self.flows[::-1], but this doesn't
-            # work correctly for some reason in TorchScript.
-            #
-            # We also can't use a Python list to store the flows in reverse
-            # order in __init__ for some other reason.
-            #
-            # We ALSO can't index into an nn.ModuleList with a variable for yet
-            # another reason! BUT, we can enumerate over one.
-            #
-            # So, we have this ridiculousness: iterate backwards over flow
-            # indexes. Enumerate forwards over flows. Match indexes and waste
-            # CPU time.
-            # for i in range(len(self.flows) - 1, -1, -1):
-            #     for j, f in enumerate(self.flows):
-            #         if j == i:
-            #             x, _logdet = f.forward(x, x_mask, g=g, reverse=reverse)
-
+            else:
+                x, logdet = f(x, x_mask, g=g, reverse=reverse)
         if self.n_sqz > 1:
             x, x_mask = unsqueeze(x, x_mask, self.n_sqz)
-
         return x, logdet_tot
 
     def store_inverse(self):
@@ -302,9 +269,7 @@ class FlowGenerator(nn.Module):
         self.block_length = block_length
         self.mean_only = mean_only
         self.hidden_channels_enc = hidden_channels_enc
-        self.hidden_channels_dec = (
-            hidden_channels if (hidden_channels_dec is None) else hidden_channels_dec
-        )
+        self.hidden_channels_dec = hidden_channels_dec
         self.prenet = prenet
 
         self.encoder = TextEncoder(
@@ -325,12 +290,12 @@ class FlowGenerator(nn.Module):
         )
 
         self.decoder = FlowSpecDecoder(
-            in_channels=out_channels,
-            hidden_channels=self.hidden_channels_dec,
-            kernel_size=kernel_size_dec,
-            dilation_rate=dilation_rate,
-            n_blocks=n_blocks_dec,
-            n_layers=n_block_layers,
+            out_channels,
+            hidden_channels_dec or hidden_channels,
+            kernel_size_dec,
+            dilation_rate,
+            n_blocks_dec,
+            n_block_layers,
             p_dropout=p_dropout_dec,
             n_split=n_split,
             n_sqz=n_sqz,
@@ -338,37 +303,59 @@ class FlowGenerator(nn.Module):
             gin_channels=gin_channels,
         )
 
-        self.emb_g: typing.Optional[
-            typing.Callable[[torch.Tensor], torch.Tensor]
-        ] = None
         if n_speakers > 1:
             self.emb_g = nn.Embedding(n_speakers, gin_channels)
-            assert self.emb_g is not None
             nn.init.uniform_(self.emb_g.weight, -0.1, 0.1)
 
     def forward(
         self,
-        x: torch.Tensor,
-        x_lengths: torch.Tensor,
-        y: torch.Tensor,
-        y_lengths: torch.Tensor,
-        g: typing.Optional[torch.Tensor] = None,
-        noise_scale: float = 1.0,
-        length_scale: float = 1.0,
+        x,
+        x_lengths,
+        y=None,
+        y_lengths=None,
+        g=None,
+        gen=False,
+        noise_scale=1.0,
+        length_scale=1.0,
     ):
         if g is not None:
-            assert self.emb_g is not None
             g = F.normalize(self.emb_g(g)).unsqueeze(-1)  # [b, h]
-
         x_m, x_logs, logw, x_mask = self.encoder(x, x_lengths, g=g)
 
-        y_max_length = y.size(2)
-
+        if gen:
+            w = torch.exp(logw) * x_mask * length_scale
+            w_ceil = torch.ceil(w)
+            y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
+            y_max_length = None
+        else:
+            y_max_length = y.size(2)
         y, y_lengths, y_max_length = self.preprocess(y, y_lengths, y_max_length)
         z_mask = torch.unsqueeze(sequence_mask(y_lengths, y_max_length), 1).to(
             x_mask.dtype
         )
         attn_mask = torch.unsqueeze(x_mask, -1) * torch.unsqueeze(z_mask, 2)
+
+        if gen:
+            attn = generate_path(w_ceil.squeeze(1), attn_mask.squeeze(1)).unsqueeze(1)
+            z_m = torch.matmul(
+                attn.squeeze(1).transpose(1, 2), x_m.transpose(1, 2)
+            ).transpose(
+                1, 2
+            )  # [b, t', t], [b, t, d] -> [b, d, t']
+            z_logs = torch.matmul(
+                attn.squeeze(1).transpose(1, 2), x_logs.transpose(1, 2)
+            ).transpose(
+                1, 2
+            )  # [b, t', t], [b, t, d] -> [b, d, t']
+            logw_ = torch.log(1e-8 + torch.sum(attn, -1)) * x_mask
+
+            z = (z_m + torch.exp(z_logs) * torch.randn_like(z_m) * noise_scale) * z_mask
+            y, logdet = self.decoder(z, z_mask, g=g, reverse=True)
+            return (
+                (y, z_m, z_logs, logdet, z_mask),
+                (x_m, x_logs, x_mask),
+                (attn, logw, logw_),
+            )
 
         z, logdet = self.decoder(y, z_mask, g=g, reverse=False)
         with torch.no_grad():
@@ -410,88 +397,11 @@ class FlowGenerator(nn.Module):
             (attn, logw, logw_),
         )
 
-    def infer(
-        self,
-        x: torch.Tensor,
-        x_lengths: torch.Tensor,
-        noise_scale: float = 0.667,
-        length_scale: float = 1.0,
-    ):
-        x_m, x_logs, logw, x_mask = self.encoder(x, x_lengths)
-
-        w = torch.exp(logw) * x_mask * length_scale
-        w_ceil = torch.ceil(w)
-        y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
-
-        y, y_lengths, y_max_length = self.preprocess(None, y_lengths, None)
-        z_mask = torch.unsqueeze(sequence_mask(y_lengths, y_max_length), 1).to(
-            x_mask.dtype
-        )
-        attn_mask = torch.unsqueeze(x_mask, -1) * torch.unsqueeze(z_mask, 2)
-
-        attn = generate_path(w_ceil.squeeze(1), attn_mask.squeeze(1)).unsqueeze(1)
-        z_m = torch.matmul(
-            attn.squeeze(1).transpose(1, 2), x_m.transpose(1, 2)
-        ).transpose(
-            1, 2
-        )  # [b, t', t], [b, t, d] -> [b, d, t']
-        z_logs = torch.matmul(
-            attn.squeeze(1).transpose(1, 2), x_logs.transpose(1, 2)
-        ).transpose(
-            1, 2
-        )  # [b, t', t], [b, t, d] -> [b, d, t']
-
-        z = (z_m + (torch.exp(z_logs) * torch.randn_like(z_m) * noise_scale)) * z_mask
-        y, _ = self.decoder(z, z_mask, reverse=True)
-
-        return y
-
-    def alignments(
-        self, x: torch.Tensor, x_lengths: torch.Tensor, length_scale: float = 1.0
-    ):
-        x_m, x_logs, logw, x_mask = self.encoder(x, x_lengths)
-
-        w = torch.exp(logw) * x_mask * length_scale
-        w_ceil = torch.ceil(w)
-        y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
-
-        y, y_lengths, y_max_length = self.preprocess(None, y_lengths, None)
-        z_mask = torch.unsqueeze(sequence_mask(y_lengths, y_max_length), 1).to(
-            x_mask.dtype
-        )
-        attn_mask = torch.unsqueeze(x_mask, -1) * torch.unsqueeze(z_mask, 2)
-
-        attn = generate_path(w_ceil.squeeze(1), attn_mask.squeeze(1)).unsqueeze(1)
-
-        z_m = torch.matmul(
-            attn.squeeze(1).transpose(1, 2), x_m.transpose(1, 2)
-        ).transpose(
-            1, 2
-        )  # [b, t', t], [b, t, d] -> [b, d, t']
-        z_logs = torch.matmul(
-            attn.squeeze(1).transpose(1, 2), x_logs.transpose(1, 2)
-        ).transpose(
-            1, 2
-        )  # [b, t', t], [b, t, d] -> [b, d, t']
-
-        z = (z_m + torch.exp(z_logs)) * z_mask
-        y, _ = self.decoder(z, z_mask, reverse=True)
-
-        return attn, y, y_lengths
-
-    def preprocess(
-        self,
-        y: typing.Optional[torch.Tensor],
-        y_lengths: torch.Tensor,
-        y_max_length: typing.Optional[int],
-    ):
+    def preprocess(self, y, y_lengths, y_max_length):
         if y_max_length is not None:
-            assert y is not None
             y_max_length = (y_max_length // self.n_sqz) * self.n_sqz
             y = y[:, :, :y_max_length]
-
         y_lengths = (y_lengths // self.n_sqz) * self.n_sqz
-
         return y, y_lengths, y_max_length
 
     def store_inverse(self):

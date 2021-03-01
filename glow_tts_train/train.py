@@ -11,13 +11,7 @@ from .checkpoint import Checkpoint, save_checkpoint
 from .config import TrainingConfig
 from .models import ModelType, setup_model
 from .optimize import OptimizerType
-from .utils import clip_grad_value_, duration_loss, mle_loss
-
-try:
-    from apex import amp
-except ImportError:
-    # apex not available (no fp16)
-    amp = None
+from .utils import clip_grad_value_, duration_loss, mle_loss, to_gpu
 
 
 _LOGGER = logging.getLogger("glow_tts_train")
@@ -40,7 +34,6 @@ def train(
 
     model, optimizer = setup_model(config, model=model, optimizer=optimizer)
     assert optimizer is not None
-
     assert model is not None
 
     # Gradient scaler
@@ -53,11 +46,12 @@ def train(
         )
         epoch_start_time = time.perf_counter()
         global_step = train_step(
-            global_step,
-            epoch,
-            model,
-            optimizer,
-            train_loader,
+            global_step=global_step,
+            epoch=epoch,
+            model=model,
+            optimizer=optimizer,
+            config=config,
+            train_loader=train_loader,
             fp16_run=config.fp16_run,
             scaler=scaler,
         )
@@ -76,6 +70,12 @@ def train(
                 ),
                 checkpoint_path,
             )
+
+            # Save checkpoint config
+            config_path = model_dir / f"config_{global_step}.json"
+            with open(config_path, "w") as config_file:
+                config.save(config_file)
+
             _LOGGER.info("Saved checkpoint to %s", checkpoint_path)
 
         epoch_end_time = time.perf_counter()
@@ -92,6 +92,7 @@ def train_step(
     epoch: int,
     model: ModelType,
     optimizer: OptimizerType,
+    config: TrainingConfig,
     train_loader: DataLoader,
     fp16_run: bool,
     scaler: typing.Optional[GradScaler] = None,
@@ -102,22 +103,21 @@ def train_step(
 
     model.train()
     for batch_idx, (x, x_lengths, y, y_lengths) in enumerate(train_loader):
-        x, x_lengths = (x.cuda(non_blocking=True), x_lengths.cuda(non_blocking=True))
-        y, y_lengths = (y.cuda(non_blocking=True), y_lengths.cuda(non_blocking=True))
+        x, x_lengths = (to_gpu(x), to_gpu(x_lengths))
+        y, y_lengths = (to_gpu(y), to_gpu(y_lengths))
 
         # Train model
         optimizer.zero_grad()
 
-        with autocast(enabled=fp16_run):
-            (
-                (z, z_m, z_logs, logdet, z_mask),
-                (_x_m, _x_logs, _x_mask),
-                (_attn, logw, logw_),
-            ) = model(x, x_lengths, y, y_lengths, gen=False)
+        (
+            (z, z_m, z_logs, logdet, z_mask),
+            (_x_m, _x_logs, _x_mask),
+            (_attn, logw, logw_),
+        ) = model(x, x_lengths, y, y_lengths)
 
-            # Compute loss
-            l_mle = mle_loss(z, z_m, z_logs, logdet, z_mask)
-            l_length = duration_loss(logw, logw_, x_lengths)
+        # Compute loss
+        l_mle = mle_loss(z, z_m, z_logs, logdet, z_mask)
+        l_length = duration_loss(logw, logw_, x_lengths)
 
         # TODO: Weighted loss
         # loss_gs = [l_mle, l_length]
@@ -129,17 +129,15 @@ def train_step(
             # Float16
             assert scaler is not None
             scaler.scale(loss_g).backward()
-            clip_grad_value_(model.parameters(), 5)
+            clip_grad_value_(model.parameters(), config.grad_clip)
 
-            scaler.step(optimizer)
+            scaler.step(optimizer._optim)
             scaler.update()
         else:
             # Float32
             loss_g.backward()
-            clip_grad_value_(model.parameters(), 5)
+            clip_grad_value_(model.parameters(), config.grad_clip)
             optimizer.step()
-
-        optimizer.step()
 
         _LOGGER.debug(
             "Loss: %s (step=%s/%s)", loss_g.item(), batch_idx + 1, steps_per_epoch

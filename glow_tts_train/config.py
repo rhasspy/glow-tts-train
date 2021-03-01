@@ -57,6 +57,7 @@ class TrainingConfig(DataClassJsonMixin):
     learning_rate: float = 1e0
     betas: typing.Tuple[float, float] = field(default=(0.9, 0.98))
     eps: float = 1e-9
+    grad_clip: float = 5.0
     warmup_steps: int = 4000
     scheduler: str = "noam"
     batch_size: int = 32
@@ -64,6 +65,7 @@ class TrainingConfig(DataClassJsonMixin):
     audio: AudioConfig = field(default_factory=AudioConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     version: int = 1
+    git_commit: str = ""
 
     def save(self, config_file: typing.TextIO):
         """Save config as JSON to a file"""
