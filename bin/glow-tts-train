@@ -10,7 +10,7 @@ fi
 
 args=()
 
-git_commit="$(git -C "${src_dir}" rev-parse --short HEAD || '')"
+git_commit="$(git -C "${src_dir}" rev-parse --short HEAD)"
 if [[ -n "${git_commit}" ]]; then
     args+=('--git-commit' "${git_commit}")
 fi
