@@ -13,7 +13,6 @@ from .models import ModelType, setup_model
 from .optimize import OptimizerType
 from .utils import clip_grad_value_, duration_loss, mle_loss, to_gpu
 
-
 _LOGGER = logging.getLogger("glow_tts_train")
 
 # -----------------------------------------------------------------------------
@@ -132,10 +131,10 @@ def train_step(
             # Float16
             assert scaler is not None
             scaler.scale(loss_g).backward()
-            scaler.unscale_(optimizer._optim)
+            scaler.unscale_(optimizer._optim)  # pylint: disable=protected-access
             clip_grad_value_(model.parameters(), config.grad_clip)
 
-            scaler.step(optimizer._optim)
+            scaler.step(optimizer._optim)  # pylint: disable=protected-access
             scaler.update()
         else:
             # Float32
