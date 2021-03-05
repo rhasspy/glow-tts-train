@@ -22,6 +22,9 @@ def main():
     parser = argparse.ArgumentParser(prog="glow_tts-train.infer_onnx")
     parser.add_argument("model", help="Path to onnx model")
     parser.add_argument(
+        "--numpy-dir", help="Output numpy files to a directory instead of JSONL"
+    )
+    parser.add_argument(
         "--config", action="append", help="Path to JSON configuration file(s)"
     )
     parser.add_argument(
@@ -49,6 +52,10 @@ def main():
         args.config = [Path(p) for p in args.config]
 
     args.model = Path(args.model)
+
+    if args.numpy_dir:
+        args.numpy_dir = Path(args.numpy_dir)
+        args.numpy_dir.mkdir(parents=True, exist_ok=True)
 
     # Load configuration
     config = TrainingConfig()
@@ -118,15 +125,26 @@ def main():
             start_time = time.perf_counter()
             mel = model.run(
                 None, {"input": text, "input_lengths": text_lengths, "scales": scales}
-            )[0]
+            )[0].squeeze(0)
             end_time = time.perf_counter()
 
-            # Write mel spectrogram and settings as a JSON object on one line
-            mel_list = mel.squeeze(0).tolist()
-            output_obj["id"] = utt_id
-            output_obj["mel"] = mel_list
+            if args.numpy_dir:
+                if not utt_id:
+                    # Use timestamp for file name
+                    utt_id = str(time.time())
 
-            writer.write(output_obj)
+                # Save as numpy file
+                mel_path = args.numpy_dir / (utt_id + ".npy")
+                np.save(str(mel_path), mel, allow_pickle=True)
+
+                _LOGGER.debug("Wrote %s", mel_path)
+            else:
+                # Write mel spectrogram and settings as a JSON object on one line
+                mel_list = mel.tolist()
+                output_obj["id"] = utt_id
+                output_obj["mel"] = mel_list
+
+                writer.write(output_obj)
 
             _LOGGER.debug(
                 "Generated mel in %s second(s) (%s, shape=%s)",

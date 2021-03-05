@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import jsonlines
+import numpy as np
 import torch
 
 from .checkpoint import load_checkpoint
@@ -19,6 +20,9 @@ def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(prog="glow-tts-train.infer")
     parser.add_argument("checkpoint", help="Path to model checkpoint (.pth)")
+    parser.add_argument(
+        "--numpy-dir", help="Output numpy files to a directory instead of JSONL"
+    )
     parser.add_argument(
         "--config", action="append", help="Path to JSON configuration file(s)"
     )
@@ -51,6 +55,10 @@ def main():
         args.config = [Path(p) for p in args.config]
 
     args.checkpoint = Path(args.checkpoint)
+
+    if args.numpy_dir:
+        args.numpy_dir = Path(args.numpy_dir)
+        args.numpy_dir.mkdir(parents=True, exist_ok=True)
 
     # Load config
     config = TrainingConfig()
@@ -119,9 +127,6 @@ def main():
         model.decoder.store_inverse()
         model.eval()
 
-        # Inference only
-        # model.forward = model.infer
-
     if os.isatty(sys.stdin.fileno()):
         print("Reading whitespace-separated phoneme ids from stdin...", file=sys.stderr)
 
@@ -165,12 +170,25 @@ def main():
                 end_time = time.perf_counter()
 
                 # Write mel spectrogram and settings as a JSON object on one line
-                mel = mel.squeeze(0).cpu().float()
-                mel_list = mel.numpy().tolist()
-                output_obj["id"] = utt_id
-                output_obj["mel"] = mel_list
+                mel = mel.squeeze(0).cpu().float().numpy()
 
-                writer.write(output_obj)
+                if args.numpy_dir:
+                    if not utt_id:
+                        # Use timestamp for file name
+                        utt_id = str(time.time())
+
+                    # Save as numpy file
+                    mel_path = args.numpy_dir / (utt_id + ".npy")
+                    np.save(str(mel_path), mel, allow_pickle=True)
+
+                    _LOGGER.debug("Wrote %s", mel_path)
+                else:
+                    # Write line of JSON
+                    mel_list = mel.tolist()
+                    output_obj["id"] = utt_id
+                    output_obj["mel"] = mel_list
+
+                    writer.write(output_obj)
 
                 _LOGGER.debug(
                     "Generated mel in %s second(s) (%s, shape=%s)",
