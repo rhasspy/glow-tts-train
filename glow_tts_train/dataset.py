@@ -10,7 +10,11 @@ import numpy as np
 import torch
 import torch.utils.data
 
+from .config import TrainingConfig
+
 _LOGGER = logging.getLogger("glow_tts_train.dataset")
+
+# -----------------------------------------------------------------------------
 
 
 class PhonemeMelLoader(torch.utils.data.Dataset):
@@ -98,13 +102,45 @@ class PhonemeMelCollate:
 # -----------------------------------------------------------------------------
 
 
-def load_phonemes(csv_file: typing.TextIO) -> typing.Dict[str, torch.IntTensor]:
+def load_phonemes(
+    csv_file: typing.TextIO, config: TrainingConfig
+) -> typing.Dict[str, torch.IntTensor]:
     phonemes = {}
+    num_too_small = 0
+    num_too_large = 0
+
     reader = csv.reader(csv_file, delimiter="|")
     for row in reader:
         utt_id, phoneme_str = row[0], row[1]
         phoneme_ids = [int(p) for p in phoneme_str.strip().split()]
+        num_phonemes = len(phoneme_ids)
+
+        if (config.min_seq_length is not None) and (
+            num_phonemes < config.min_seq_length
+        ):
+            _LOGGER.debug(
+                "Dropping %s (%s < %s)", utt_id, num_phonemes, config.min_seq_length
+            )
+            num_too_small += 1
+            continue
+
+        if (config.max_seq_length is not None) and (
+            num_phonemes > config.max_seq_length
+        ):
+            _LOGGER.debug(
+                "Dropping %s (%s > %s)", utt_id, num_phonemes, config.max_seq_length
+            )
+            num_too_large += 1
+            continue
+
         phonemes[utt_id] = torch.IntTensor(phoneme_ids)
+
+    if (num_too_small > 0) or (num_too_large > 0):
+        _LOGGER.warning(
+            "Dropped some utterance (%s too small, %s too large)",
+            num_too_small,
+            num_too_large,
+        )
 
     return phonemes
 

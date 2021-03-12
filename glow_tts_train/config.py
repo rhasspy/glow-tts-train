@@ -62,6 +62,8 @@ class TrainingConfig(DataClassJsonMixin):
     scheduler: str = "noam"
     batch_size: int = 32
     fp16_run: bool = False
+    min_seq_length: typing.Optional[int] = None
+    max_seq_length: typing.Optional[int] = None
     audio: AudioConfig = field(default_factory=AudioConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     version: int = 1

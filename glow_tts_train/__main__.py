@@ -110,7 +110,7 @@ def main():
     # Load phonemes
     _LOGGER.debug("Loading phonemes from %s", args.phonemes_csv)
     with open(args.phonemes_csv, "r") as phonemes_file:
-        id_phonemes = load_phonemes(phonemes_file)
+        id_phonemes = load_phonemes(phonemes_file, config)
 
     _LOGGER.info("Loaded phonemes for %s utterances", len(id_phonemes))
 
