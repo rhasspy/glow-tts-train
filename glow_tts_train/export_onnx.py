@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import logging
+import shutil
 from pathlib import Path
 
 import torch
@@ -19,7 +20,7 @@ def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(prog="glow-tts-export-onnx")
     parser.add_argument("checkpoint", help="Path to model checkpoint (.pth)")
-    parser.add_argument("output", help="Path to output onnx model")
+    parser.add_argument("output", help="Path to output directory")
     parser.add_argument(
         "--config", action="append", help="Path to JSON configuration file(s)"
     )
@@ -86,7 +87,11 @@ def main():
     model.forward = infer_forward
 
     # Create output directory
-    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.mkdir(parents=True, exist_ok=True)
+
+    # Write config
+    with open(args.output / "config.json", "w") as config_file:
+        config.save(config_file)
 
     # Create dummy input
     sequences = torch.randint(
@@ -101,7 +106,7 @@ def main():
     torch.onnx.export(
         model,
         dummy_input,
-        str(args.output),
+        str(args.output / "generator.onnx"),
         opset_version=OPSET_VERSION,
         do_constant_folding=True,
         input_names=["input", "input_lengths", "scales"],
