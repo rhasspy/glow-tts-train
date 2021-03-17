@@ -166,7 +166,11 @@ def main():
 
     assert config.model.num_symbols > 0, "No symbols"
 
-    config.num_speakers = num_speakers
+    config.model.n_speakers = num_speakers
+    if num_speakers > 1:
+        assert (
+            config.model.gin_channels > 0
+        ), "Multispeaker model must have gin_channels > 0"
 
     # Create data loader
     dataset = PhonemeMelLoader(
@@ -175,7 +179,7 @@ def main():
         mel_dirs=mel_dirs,
         multispeaker=(num_speakers > 1),
     )
-    collate_fn = PhonemeMelCollate()
+    collate_fn = PhonemeMelCollate(multispeaker=(num_speakers > 1))
 
     batch_size = config.batch_size if args.batch_size is None else args.batch_size
     sampler = DistributedSampler(dataset) if is_distributed else None

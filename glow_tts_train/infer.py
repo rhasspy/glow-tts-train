@@ -37,6 +37,9 @@ def main():
     parser.add_argument("--cuda", action="store_true", help="Use GPU for inference")
     parser.add_argument("--jit", action="store_true", help="Load TorchScript model")
     parser.add_argument(
+        "--speaker", type=int, help="Speaker id number (multispeaker model only)"
+    )
+    parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to the console"
     )
     args = parser.parse_args()
@@ -127,6 +130,19 @@ def main():
         model.decoder.store_inverse()
         model.eval()
 
+    # Multispeaker
+    speaker_id = None
+    if args.speaker or config.model.n_speakers > 1:
+        if args.speaker is None:
+            args.speaker = 0
+
+        speaker_id = torch.LongTensor([args.speaker])
+
+    if args.cuda and (speaker_id is not None):
+        speaker_id = speaker_id.cuda()
+
+    # -------------------------------------------------------------------------
+
     if os.isatty(sys.stdin.fileno()):
         print("Reading whitespace-separated phoneme ids from stdin...", file=sys.stderr)
 
@@ -166,6 +182,7 @@ def main():
                     noise_scale=args.noise_scale,
                     length_scale=args.length_scale,
                     gen=True,
+                    g=speaker_id,
                 )
                 end_time = time.perf_counter()
 

@@ -111,7 +111,7 @@ class PhonemeMelCollate:
             output_lengths[i] = mel.size(1)
 
             if speaker_ids is not None:
-                speaker_ids[i] = batch[ids_sorted_decreasing[i]][2]
+                speaker_ids[i] = batch[ids_sorted_decreasing[i]][3]
 
         return text_padded, input_lengths, mel_padded, output_lengths, speaker_ids
 

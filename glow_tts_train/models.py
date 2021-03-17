@@ -320,6 +320,7 @@ class FlowGenerator(nn.Module):
     ):
         if g is not None:
             g = F.normalize(self.emb_g(g)).unsqueeze(-1)  # [b, h]
+
         x_m, x_logs, logw, x_mask = self.encoder(x, x_lengths, g=g)
 
         if gen:
