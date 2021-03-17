@@ -24,11 +24,14 @@ def initialize_model(train_loader: DataLoader, config: TrainingConfig) -> ModelT
     model.cuda()
 
     model.train()
-    for _batch_idx, (x, x_lengths, y, y_lengths) in enumerate(train_loader):
+    for _batch_idx, (x, x_lengths, y, y_lengths, speaker_ids) in enumerate(train_loader):
         x, x_lengths = to_gpu(x), to_gpu(x_lengths)
         y, y_lengths = to_gpu(y), to_gpu(y_lengths)
 
-        _ = model(x, x_lengths, y, y_lengths)
+        if speaker_ids is not None:
+            speaker_ids = to_gpu(speaker_ids)
+
+        _ = model(x, x_lengths, y, y_lengths, g=speaker_ids)
         break
 
     return model

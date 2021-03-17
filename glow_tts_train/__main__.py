@@ -25,13 +25,17 @@ _LOGGER = logging.getLogger("glow_tts_train")
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(prog="glow-tts-train")
-    parser.add_argument("model_dir", help="Directory to store model artifacts")
     parser.add_argument(
-        "phonemes_csv", help="CSV file with utterance id|phoneme ids lines"
+        "--output", required=True, help="Directory to store model artifacts"
     )
     parser.add_argument(
-        "mels",
-        help="JSONL file with mel spectrograms or directory with .npy files (--mels-dir)",
+        "--dataset",
+        required=True,
+        nargs=2,
+        action="append",
+        default=[],
+        metavar=("phonemes_csv", "mels"),
+        help="Phonemes CSV and JSONL file with mel spectrograms or directory with .npy files (--mels-dir)",
     )
     parser.add_argument(
         "--mels-dir",
@@ -81,9 +85,11 @@ def main():
     # -------------------------------------------------------------------------
 
     # Convert to paths
-    args.model_dir = Path(args.model_dir)
-    args.phonemes_csv = Path(args.phonemes_csv)
-    args.mels = Path(args.mels)
+    args.output = Path(args.output)
+    args.dataset = [
+        (Path(phonemes_path), Path(mels_path))
+        for phonemes_path, mels_path in args.dataset
+    ]
 
     if args.config:
         args.config = [Path(p) for p in args.config]
@@ -102,42 +108,57 @@ def main():
     _LOGGER.debug(config)
 
     # Create output directory
-    args.model_dir.mkdir(parents=True, exist_ok=True)
+    args.output.mkdir(parents=True, exist_ok=True)
 
     _LOGGER.debug("Setting random seed to %s", config.seed)
     random.seed(config.seed)
 
-    # Load phonemes
-    _LOGGER.debug("Loading phonemes from %s", args.phonemes_csv)
-    with open(args.phonemes_csv, "r") as phonemes_file:
-        id_phonemes = load_phonemes(phonemes_file, config)
+    all_id_phonemes = {}
+    all_id_mels = {}
+    mel_dirs = {}
+    num_speakers = len(args.dataset)
 
-    _LOGGER.info("Loaded phonemes for %s utterances", len(id_phonemes))
+    for dataset_idx, (phonemes_path, mels_path) in enumerate(args.dataset):
+        # Load phonemes
+        _LOGGER.debug("Loading phonemes from %s", phonemes_path)
+        with open(phonemes_path, "r") as phonemes_file:
+            id_phonemes = load_phonemes(phonemes_file, config)
 
-    # Load mels
-    id_mels = {}
-    if args.mels_dir:
-        _LOGGER.debug("Verifying mels in %s", args.mels)
-        missing_ids = set()
+        _LOGGER.info("Loaded phonemes for %s utterances", len(id_phonemes))
+
+        # Load mels
+        id_mels = {}
+        if args.mels_dir:
+            _LOGGER.debug("Verifying mels in %s", mels_path)
+            missing_ids = set()
+            for utt_id in id_phonemes:
+                mel_path = mels_path / (utt_id + ".npy")
+                if not mel_path.is_file():
+                    missing_ids.add(utt_id)
+
+            if missing_ids:
+                _LOGGER.fatal(
+                    "Missing .npy files for utterances: %s", sorted(list(missing_ids))
+                )
+                sys.exit(1)
+
+            _LOGGER.info("Verified %s mel(s) in %s", len(id_phonemes), mels_path)
+            mel_dirs[dataset_idx] = mels_path
+        else:
+            # TODO: Verify audio configuration
+            _LOGGER.debug("Loading JSONL mels from %s", mels_path)
+            with open(mels_path, "r") as mels_file:
+                id_mels = load_mels(mels_file)
+
+            _LOGGER.info("Loaded mels for %s utterances", len(id_mels))
+
+        # Merge with main set.
+        # Disambiguate utterance ids using dataset index.
         for utt_id in id_phonemes:
-            mel_path = args.mels / (utt_id + ".npy")
-            if not mel_path.is_file():
-                missing_ids.add(utt_id)
+            all_id_phonemes[(dataset_idx, utt_id)] = id_phonemes[utt_id]
 
-        if missing_ids:
-            _LOGGER.fatal(
-                "Missing .npy files for utterances: %s", sorted(list(missing_ids))
-            )
-            sys.exit(1)
-
-        _LOGGER.info("Verified %s mel(s) in %s", len(id_phonemes), args.mels)
-    else:
-        # TODO: Verify audio configuration
-        _LOGGER.debug("Loading JSONL mels from %s", args.mels)
-        with open(args.mels, "r") as mels_file:
-            id_mels = load_mels(mels_file)
-
-        _LOGGER.info("Loaded mels for %s utterances", len(id_mels))
+        for utt_id in id_mels:
+            all_id_mels[(dataset_idx, utt_id)] = id_mels[utt_id]
 
     # Set num_symbols
     if config.model.num_symbols < 1:
@@ -145,9 +166,14 @@ def main():
 
     assert config.model.num_symbols > 0, "No symbols"
 
+    config.num_speakers = num_speakers
+
     # Create data loader
     dataset = PhonemeMelLoader(
-        id_phonemes, id_mels, mels_dir=(args.mels if args.mels_dir else None)
+        id_phonemes=all_id_phonemes,
+        id_mels=all_id_mels,
+        mel_dirs=mel_dirs,
+        multispeaker=(num_speakers > 1),
     )
     collate_fn = PhonemeMelCollate()
 
@@ -197,7 +223,7 @@ def main():
         train(
             train_loader,
             config,
-            args.model_dir,
+            args.output,
             model=model,
             optimizer=optimizer,
             global_step=global_step,

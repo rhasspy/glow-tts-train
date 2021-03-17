@@ -103,9 +103,12 @@ def train_step(
     all_loss_g: typing.List[float] = []
 
     model.train()
-    for batch_idx, (x, x_lengths, y, y_lengths) in enumerate(train_loader):
+    for batch_idx, (x, x_lengths, y, y_lengths, speaker_ids) in enumerate(train_loader):
         x, x_lengths = (to_gpu(x), to_gpu(x_lengths))
         y, y_lengths = (to_gpu(y), to_gpu(y_lengths))
+
+        if speaker_ids is not None:
+            speaker_ids = to_gpu(speaker_ids)
 
         # Train model
         optimizer.zero_grad()
@@ -115,7 +118,7 @@ def train_step(
                 (z, z_m, z_logs, logdet, z_mask),
                 (_x_m, _x_logs, _x_mask),
                 (_attn, logw, logw_),
-            ) = model(x, x_lengths, y, y_lengths)
+            ) = model(x, x_lengths, y, y_lengths, g=speaker_ids)
 
             # Compute loss
             l_mle = mle_loss(z, z_m, z_logs, logdet, z_mask)

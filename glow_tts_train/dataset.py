@@ -20,13 +20,15 @@ _LOGGER = logging.getLogger("glow_tts_train.dataset")
 class PhonemeMelLoader(torch.utils.data.Dataset):
     def __init__(
         self,
-        id_phonemes: typing.Dict[str, torch.IntTensor],
-        id_mels: typing.Dict[str, torch.FloatTensor],
-        mels_dir: typing.Optional[typing.Union[str, Path]] = None,
+        id_phonemes: typing.Dict[typing.Tuple[int, str], torch.IntTensor],
+        id_mels: typing.Dict[typing.Tuple[int, str], torch.FloatTensor],
+        mel_dirs: typing.Optional[typing.Dict[int, Path]] = None,
+        multispeaker: bool = False,
     ):
         self.id_phonemes = id_phonemes
         self.id_mels = id_mels
-        self.mels_dir = Path(mels_dir) if mels_dir else None
+        self.mel_dirs = mel_dirs
+        self.multispeaker = multispeaker
 
         if self.id_mels:
             self.ids = list(
@@ -40,21 +42,27 @@ class PhonemeMelLoader(torch.utils.data.Dataset):
         random.shuffle(self.ids)
 
     def __getitem__(self, index):
-        utt_id = self.ids[index]
-        text = self.id_phonemes[utt_id]
-        mel = self.id_mels.get(utt_id)
+        utt_key = self.ids[index]
+        speaker_idx, utt_id = utt_key
+        text = self.id_phonemes[utt_key]
+        mel = self.id_mels.get(utt_key)
 
         if mel is None:
-            assert self.mels_dir, f"Missing mel for id {utt_id}, but no mels_dir"
-            mel_path = self.mels_dir / (utt_id + ".npy")
+            mels_dir = self.mel_dirs.get(speaker_idx)
+            assert mels_dir, f"Missing mel for id {utt_id}, but no mels_dir"
+            mel_path = mels_dir / (utt_id + ".npy")
 
             # TODO: Verify shape
             mel = torch.from_numpy(np.load(mel_path, allow_pickle=True))
 
             # Cache mel
-            self.id_mels[utt_id] = mel
+            self.id_mels[utt_key] = mel
 
-        # phonemes, mels, lengths
+        if self.multispeaker:
+            # phonemes, mels, length, speaker
+            return (text, mel, len(text), speaker_idx)
+
+        # phonemes, mels, length
         return (text, mel, len(text))
 
     def __len__(self):
@@ -62,8 +70,9 @@ class PhonemeMelLoader(torch.utils.data.Dataset):
 
 
 class PhonemeMelCollate:
-    def __init__(self, n_frames_per_step=1):
+    def __init__(self, n_frames_per_step: int = 1, multispeaker: bool = False):
         self.n_frames_per_step = n_frames_per_step
+        self.multispeaker = multispeaker
 
     def __call__(self, batch):
         # Right zero-pad all one-hot text sequences to max input length
@@ -91,12 +100,20 @@ class PhonemeMelCollate:
         mel_padded = torch.FloatTensor(len(batch), num_mels, max_target_len)
         mel_padded.zero_()
         output_lengths = torch.LongTensor(len(batch))
+
+        speaker_ids = None
+        if self.multispeaker:
+            speaker_ids = torch.LongTensor(len(batch))
+
         for i in range(len(ids_sorted_decreasing)):
             mel = batch[ids_sorted_decreasing[i]][1]
             mel_padded[i, :, : mel.size(1)] = mel
             output_lengths[i] = mel.size(1)
 
-        return text_padded, input_lengths, mel_padded, output_lengths
+            if speaker_ids is not None:
+                speaker_ids[i] = batch[ids_sorted_decreasing[i]][2]
+
+        return text_padded, input_lengths, mel_padded, output_lengths, speaker_ids
 
 
 # -----------------------------------------------------------------------------
