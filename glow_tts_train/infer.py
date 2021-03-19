@@ -33,7 +33,7 @@ def main():
     parser.add_argument(
         "--csv", action="store_true", help="Input format is id|p1 p2 p3..."
     )
-    parser.add_argument("--noise-scale", type=float, default=0.667)
+    parser.add_argument("--noise-scale", type=float, default=0.333)
     parser.add_argument("--length-scale", type=float, default=1.0)
     parser.add_argument("--cuda", action="store_true", help="Use GPU for inference")
     parser.add_argument("--jit", action="store_true", help="Load TorchScript model")

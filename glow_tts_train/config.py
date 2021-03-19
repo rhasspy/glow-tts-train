@@ -25,7 +25,7 @@ class AudioConfig(DataClassJsonMixin):
     # Normalization
     signal_norm: bool = True
     min_level_db: float = -100.0
-    max_norm: float = 4.0
+    max_norm: float = 1.0
     clip_norm: bool = True
     symmetric_norm: bool = True
 
