@@ -113,6 +113,7 @@ def main():
     _LOGGER.debug("Setting random seed to %s", config.seed)
     random.seed(config.seed)
 
+    # Load mels
     all_id_phonemes = {}
     all_id_mels = {}
     mel_dirs = {}
@@ -179,7 +180,10 @@ def main():
         mel_dirs=mel_dirs,
         multispeaker=(num_speakers > 1),
     )
-    collate_fn = PhonemeMelCollate(multispeaker=(num_speakers > 1))
+    collate_fn = PhonemeMelCollate(
+        n_frames_per_step=config.model.n_frames_per_step,
+        multispeaker=(num_speakers > 1),
+    )
 
     batch_size = config.batch_size if args.batch_size is None else args.batch_size
     sampler = DistributedSampler(dataset) if is_distributed else None

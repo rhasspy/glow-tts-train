@@ -13,13 +13,21 @@ class AudioConfig(DataClassJsonMixin):
     filter_length: int = 1024
     hop_length: int = 256
     win_length: int = 1024
-    n_mel_channels: int = 80
-    sampling_rate: int = 22050
+    mel_channels: int = 80
+    sample_rate: int = 22050
     sample_bytes: int = 2
     channels: int = 1
     mel_fmin: float = 0.0
-    mel_fmax: float = 8000.0
-    normalized: bool = True
+    mel_fmax: typing.Optional[float] = 8000.0
+    ref_level_db: float = 20.0
+    spec_gain: float = 1.0
+
+    # Normalization
+    signal_norm: bool = True
+    min_level_db: float = -100.0
+    max_norm: float = 4.0
+    clip_norm: bool = True
+    symmetric_norm: bool = True
 
 
 @dataclass
@@ -48,6 +56,7 @@ class ModelConfig(DataClassJsonMixin):
     sigmoid_scale: bool = False
     block_length: typing.Optional[int] = None
     gin_channels: int = 0
+    n_frames_per_step: int = 1
 
 
 @dataclass

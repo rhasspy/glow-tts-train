@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import dataclasses
 import logging
 import os
 import sys
@@ -79,22 +80,7 @@ def main():
     ), "Number of symbols not set (did you forget --config or --num-symbols?)"
 
     # Default mel settings
-    output_obj = {
-        "id": "",
-        "audio": {
-            "filter_length": config.audio.filter_length,
-            "hop_length": config.audio.hop_length,
-            "win_length": config.audio.win_length,
-            "mel_channels": config.audio.n_mel_channels,
-            "sample_rate": config.audio.sampling_rate,
-            "sample_bytes": config.audio.sample_bytes,
-            "channels": config.audio.channels,
-            "mel_fmin": config.audio.mel_fmin,
-            "mel_fmax": config.audio.mel_fmax,
-            "normalized": config.audio.normalized,
-        },
-        "mel": [],
-    }
+    output_obj = {"id": "", "audio": dataclasses.asdict(config.audio), "mel": []}
 
     # Load checkpoint
     start_time = time.perf_counter()

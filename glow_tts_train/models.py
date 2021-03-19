@@ -430,7 +430,7 @@ def setup_model(
             hidden_channels=config.model.hidden_channels,
             filter_channels=config.model.filter_channels,
             filter_channels_dp=config.model.filter_channels_dp,
-            out_channels=config.audio.n_mel_channels,
+            out_channels=config.audio.mel_channels,
             kernel_size=config.model.kernel_size,
             n_heads=config.model.n_heads,
             n_layers_enc=config.model.n_layers_enc,
