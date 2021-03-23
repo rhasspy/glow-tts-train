@@ -31,11 +31,11 @@ def main():
     parser.add_argument(
         "--dataset",
         required=True,
-        nargs=2,
+        nargs=3,
         action="append",
         default=[],
-        metavar=("phonemes_csv", "mels"),
-        help="Phonemes CSV and JSONL file with mel spectrograms or directory with .npy files (--mels-dir)",
+        metavar=("speaker_id", "phonemes_csv", "mels"),
+        help="Speaker id, phonemes CSV, and JSONL file with mel spectrograms or directory with .npy files (--mels-dir)",
     )
     parser.add_argument(
         "--mels-dir",
@@ -55,6 +55,11 @@ def main():
         type=int,
         default=1,
         help="Number of epochs between checkpoints",
+    )
+    parser.add_argument(
+        "--skip-missing-mels",
+        action="store_true",
+        help="Only warn about missing mel files",
     )
     parser.add_argument(
         "--local_rank", type=int, help="Rank passed from torch.distributed.launch"
@@ -87,8 +92,8 @@ def main():
     # Convert to paths
     args.output = Path(args.output)
     args.dataset = [
-        (Path(phonemes_path), Path(mels_path))
-        for phonemes_path, mels_path in args.dataset
+        (int(dataset_idx), Path(phonemes_path), Path(mels_path))
+        for dataset_idx, phonemes_path, mels_path in args.dataset
     ]
 
     if args.config:
@@ -113,24 +118,53 @@ def main():
     _LOGGER.debug("Setting random seed to %s", config.seed)
     random.seed(config.seed)
 
+    # Set num_symbols
+    if config.model.num_symbols < 1:
+        config.model.num_symbols = max(max(p_ids) for p_ids in id_phonemes.values()) + 1
+
+    assert config.model.num_symbols > 0, "No symbols"
+
+    num_speakers = config.model.n_speakers
+    if num_speakers > 1:
+        assert (
+            config.model.gin_channels > 0
+        ), "Multispeaker model must have gin_channels > 0"
+
+    assert (
+        len(args.dataset) <= num_speakers
+    ), "More datasets than speakers in model config"
+
+    if len(args.dataset) < num_speakers:
+        _LOGGER.warning(
+            "Model has %s speaker(s), but only %s dataset(s) were provided",
+            num_speakers,
+            len(args.dataset),
+        )
+
     # Load mels
     all_id_phonemes = {}
     all_id_mels = {}
     mel_dirs = {}
-    num_speakers = len(args.dataset)
 
-    for dataset_idx, (phonemes_path, mels_path) in enumerate(args.dataset):
+    for dataset_idx, phonemes_path, mels_path in args.dataset:
         # Load phonemes
-        _LOGGER.debug("Loading phonemes from %s", phonemes_path)
+        _LOGGER.debug(
+            "Loading phonemes from %s (speaker=%s)", phonemes_path, dataset_idx
+        )
+
         with open(phonemes_path, "r") as phonemes_file:
             id_phonemes = load_phonemes(phonemes_file, config)
 
-        _LOGGER.info("Loaded phonemes for %s utterances", len(id_phonemes))
+        _LOGGER.info(
+            "Loaded phonemes for %s utterances (speaker=%s)",
+            len(id_phonemes),
+            dataset_idx,
+        )
 
         # Load mels
         id_mels = {}
         if args.mels_dir:
-            _LOGGER.debug("Verifying mels in %s", mels_path)
+            _LOGGER.debug("Verifying mels in %s (speaker=%s)", mels_path, dataset_idx)
             missing_ids = set()
             for utt_id in id_phonemes:
                 mel_path = mels_path / (utt_id + ".npy")
@@ -138,40 +172,52 @@ def main():
                     missing_ids.add(utt_id)
 
             if missing_ids:
-                _LOGGER.fatal(
-                    "Missing .npy files for utterances: %s", sorted(list(missing_ids))
-                )
-                sys.exit(1)
+                if args.skip_missing_mels:
+                    # Remove missing ids
+                    for missing_id in missing_ids:
+                        id_phonemes.pop(missing_id, None)
 
-            _LOGGER.info("Verified %s mel(s) in %s", len(id_phonemes), mels_path)
+                    _LOGGER.warning(
+                        "Missing %s/%s .npy file(s) for utterances (speaker=%s)",
+                        len(missing_ids),
+                        len(id_phonemes) + len(missing_ids),
+                        dataset_idx,
+                    )
+                else:
+                    _LOGGER.fatal(
+                        "Missing .npy files for utterances: %s (speaker=%s)",
+                        sorted(list(missing_ids)),
+                        dataset_idx,
+                    )
+                    sys.exit(1)
+
+            _LOGGER.info(
+                "Verified %s mel(s) in %s (speaker=%s)",
+                len(id_phonemes),
+                mels_path,
+                dataset_idx,
+            )
             mel_dirs[dataset_idx] = mels_path
         else:
             # TODO: Verify audio configuration
-            _LOGGER.debug("Loading JSONL mels from %s", mels_path)
+            _LOGGER.debug(
+                "Loading JSONL mels from %s (speaker=%s)", mels_path, dataset_idx
+            )
+
             with open(mels_path, "r") as mels_file:
                 id_mels = load_mels(mels_file)
 
-            _LOGGER.info("Loaded mels for %s utterances", len(id_mels))
+            _LOGGER.info(
+                "Loaded mels for %s utterances (speaker=%s)", len(id_mels), dataset_idx
+            )
 
         # Merge with main set.
-        # Disambiguate utterance ids using dataset index.
+        # Disambiguate utterance ids using dataset index (speaker id).
         for utt_id in id_phonemes:
             all_id_phonemes[(dataset_idx, utt_id)] = id_phonemes[utt_id]
 
         for utt_id in id_mels:
             all_id_mels[(dataset_idx, utt_id)] = id_mels[utt_id]
-
-    # Set num_symbols
-    if config.model.num_symbols < 1:
-        config.model.num_symbols = max(max(p_ids) for p_ids in id_phonemes.values()) + 1
-
-    assert config.model.num_symbols > 0, "No symbols"
-
-    config.model.n_speakers = num_speakers
-    if num_speakers > 1:
-        assert (
-            config.model.gin_channels > 0
-        ), "Multispeaker model must have gin_channels > 0"
 
     # Create data loader
     dataset = PhonemeMelLoader(
