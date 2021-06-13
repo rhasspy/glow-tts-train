@@ -28,6 +28,8 @@ class AudioConfig(DataClassJsonMixin):
     max_norm: float = 1.0
     clip_norm: bool = True
     symmetric_norm: bool = True
+    do_dynamic_range_compression: bool = True
+    convert_db_to_amp: bool = True
 
 
 @dataclass
