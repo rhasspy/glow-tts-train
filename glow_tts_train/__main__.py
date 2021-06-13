@@ -48,6 +48,9 @@ def main():
     parser.add_argument(
         "--batch-size", type=int, help="Batch size (default: use config)"
     )
+    parser.add_argument(
+        "--epochs", type=int, help="Number of epochs to run (default: use config)"
+    )
     parser.add_argument("--checkpoint", help="Path to restore checkpoint")
     parser.add_argument("--git-commit", help="Git commit to store in config")
     parser.add_argument(
@@ -123,6 +126,10 @@ def main():
         config.model.num_symbols = max(max(p_ids) for p_ids in id_phonemes.values()) + 1
 
     assert config.model.num_symbols > 0, "No symbols"
+
+    if args.epochs is not None:
+        # Use command-line option
+        config.epochs = args.epochs
 
     num_speakers = config.model.n_speakers
     if num_speakers > 1:
@@ -271,7 +278,9 @@ def main():
         )
 
     # Train
-    _LOGGER.info("Training started (batch size=%s)", batch_size)
+    _LOGGER.info(
+        "Training started (batch size=%s, epochs=%s)", batch_size, config.epochs
+    )
 
     try:
         train(
