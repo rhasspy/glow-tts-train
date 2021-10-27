@@ -181,9 +181,7 @@ class ActNorm(nn.Module):
 
     def forward(self, x, x_mask=None, reverse=False, **kwargs):
         if x_mask is None:
-            x_mask = torch.ones(x.size(0), 1, x.size(2)).to(
-                device=x.device, dtype=x.dtype
-            )
+            x_mask = torch.ones(x.size(0), 1, x.size(2)).type_as(x)
         x_len = torch.sum(x_mask, [1, 2])
         if not self.initialized:
             self.initialize(x, x_mask)
@@ -213,9 +211,9 @@ class ActNorm(nn.Module):
             logs = 0.5 * torch.log(torch.clamp_min(v, 1e-6))
 
             bias_init = (
-                (-m * torch.exp(-logs)).view(*self.bias.shape).to(dtype=self.bias.dtype)
+                (-m * torch.exp(-logs)).view(*self.bias.shape).type_as(self.bias)
             )
-            logs_init = (-logs).view(*self.logs.shape).to(dtype=self.logs.dtype)
+            logs_init = (-logs).view(*self.logs.shape).type_as(self.logs)
 
             self.bias.data.copy_(bias_init)
             self.logs.data.copy_(logs_init)
@@ -255,7 +253,7 @@ class InvConvNear(nn.Module):
             if hasattr(self, "weight_inv"):
                 weight = self.weight_inv
             else:
-                weight = torch.inverse(self.weight.float()).to(dtype=self.weight.dtype)
+                weight = torch.inverse(self.weight.float()).type_as(self.weight)
             logdet = None
         else:
             weight = self.weight
@@ -272,4 +270,4 @@ class InvConvNear(nn.Module):
         return z, logdet
 
     def store_inverse(self):
-        self.weight_inv = torch.inverse(self.weight.float()).to(dtype=self.weight.dtype)
+        self.weight_inv = torch.inverse(self.weight.float()).type_as(self.weight)

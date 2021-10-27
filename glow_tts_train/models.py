@@ -6,12 +6,11 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from . import monotonic_align
-from .attentions import CouplingBlock, Encoder
-from .config import TrainingConfig
-from .layers import ActNorm, ConvReluNorm, InvConvNear, LayerNorm
-from .optimize import OptimizerType
-from .utils import generate_path, sequence_mask, squeeze, unsqueeze
+from glow_tts_train import monotonic_align
+from glow_tts_train.attentions import CouplingBlock, Encoder
+from glow_tts_train.config import TrainingConfig
+from glow_tts_train.layers import ActNorm, ConvReluNorm, InvConvNear, LayerNorm
+from glow_tts_train.utils import generate_path, sequence_mask, squeeze, unsqueeze
 
 _LOGGER = logging.getLogger("test")
 
@@ -120,7 +119,7 @@ class TextEncoder(nn.Module):
     def forward(self, x, x_lengths, g=None):
         x = self.emb(x) * math.sqrt(self.hidden_channels)  # [b, t, h]
         x = torch.transpose(x, 1, -1)  # [b, h, t]
-        x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+        x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).type_as(x)
 
         if self.prenet:
             x = self.pre(x, x_mask)
@@ -331,8 +330,8 @@ class FlowGenerator(nn.Module):
         else:
             y_max_length = y.size(2)
         y, y_lengths, y_max_length = self.preprocess(y, y_lengths, y_max_length)
-        z_mask = torch.unsqueeze(sequence_mask(y_lengths, y_max_length), 1).to(
-            x_mask.dtype
+        z_mask = torch.unsqueeze(sequence_mask(y_lengths, y_max_length), 1).type_as(
+            x_mask
         )
         attn_mask = torch.unsqueeze(x_mask, -1) * torch.unsqueeze(z_mask, 2)
 
@@ -402,7 +401,7 @@ class FlowGenerator(nn.Module):
         if y_max_length is not None:
             y_max_length = (y_max_length // self.n_sqz) * self.n_sqz
             y = y[:, :, :y_max_length]
-        y_lengths = (y_lengths // self.n_sqz) * self.n_sqz
+        y_lengths = torch.div(y_lengths, self.n_sqz, rounding_mode="trunc") * self.n_sqz
         return y, y_lengths, y_max_length
 
     def store_inverse(self):
@@ -415,56 +414,38 @@ ModelType = FlowGenerator
 
 
 def setup_model(
-    config: TrainingConfig,
-    model: typing.Optional[ModelType] = None,
-    optimizer: typing.Optional[OptimizerType] = None,
-    model_factory=ModelType,
-    optimizer_factory=OptimizerType,
-    create_optimizer: bool = True,
-    use_cuda: bool = True,
-) -> typing.Tuple[ModelType, typing.Optional[OptimizerType]]:
-    if model is None:
-        # Create new generator
-        model = model_factory(
-            n_vocab=config.model.num_symbols,
-            hidden_channels=config.model.hidden_channels,
-            filter_channels=config.model.filter_channels,
-            filter_channels_dp=config.model.filter_channels_dp,
-            out_channels=config.audio.mel_channels,
-            kernel_size=config.model.kernel_size,
-            n_heads=config.model.n_heads,
-            n_layers_enc=config.model.n_layers_enc,
-            p_dropout=config.model.p_dropout,
-            n_blocks_dec=config.model.n_blocks_dec,
-            kernel_size_dec=config.model.kernel_size_dec,
-            dilation_rate=config.model.dilation_rate,
-            n_block_layers=config.model.n_block_layers,
-            p_dropout_dec=config.model.p_dropout_dec,
-            n_speakers=config.model.n_speakers,
-            gin_channels=config.model.gin_channels,
-            n_split=config.model.n_split,
-            n_sqz=config.model.n_sqz,
-            sigmoid_scale=config.model.sigmoid_scale,
-            window_size=config.model.window_size,
-            block_length=config.model.block_length,
-            mean_only=config.model.mean_only,
-            hidden_channels_enc=config.model.hidden_channels_enc,
-            hidden_channels_dec=config.model.hidden_channels_dec,
-            prenet=config.model.prenet,
-        )
+    config: TrainingConfig, model_factory=ModelType, use_cuda: bool = True,
+) -> ModelType:
+    # Create new generator
+    model = model_factory(
+        n_vocab=config.model.num_symbols,
+        hidden_channels=config.model.hidden_channels,
+        filter_channels=config.model.filter_channels,
+        filter_channels_dp=config.model.filter_channels_dp,
+        out_channels=config.audio.mel_channels,
+        kernel_size=config.model.kernel_size,
+        n_heads=config.model.n_heads,
+        n_layers_enc=config.model.n_layers_enc,
+        p_dropout=config.model.p_dropout,
+        n_blocks_dec=config.model.n_blocks_dec,
+        kernel_size_dec=config.model.kernel_size_dec,
+        dilation_rate=config.model.dilation_rate,
+        n_block_layers=config.model.n_block_layers,
+        p_dropout_dec=config.model.p_dropout_dec,
+        n_speakers=config.model.n_speakers,
+        gin_channels=config.model.gin_channels,
+        n_split=config.model.n_split,
+        n_sqz=config.model.n_sqz,
+        sigmoid_scale=config.model.sigmoid_scale,
+        window_size=config.model.window_size,
+        block_length=config.model.block_length,
+        mean_only=config.model.mean_only,
+        hidden_channels_enc=config.model.hidden_channels_enc,
+        hidden_channels_dec=config.model.hidden_channels_dec,
+        prenet=config.model.prenet,
+    )
 
     if use_cuda:
         model.cuda()
 
-    if create_optimizer and (optimizer is None):
-        optimizer = optimizer_factory(
-            model.parameters(),
-            scheduler=config.scheduler,
-            dim_model=config.model.hidden_channels,
-            warmup_steps=config.warmup_steps,
-            lr=config.learning_rate,
-            betas=config.betas,
-            eps=config.eps,
-        )
-
-    return (model, optimizer)
+    return model

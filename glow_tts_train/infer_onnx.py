@@ -8,6 +8,7 @@ from pathlib import Path
 
 import jsonlines
 import numpy as np
+
 import onnxruntime
 
 from .config import TrainingConfig

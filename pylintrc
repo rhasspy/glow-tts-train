@@ -25,13 +25,7 @@ disable=
   unused-argument,
   broad-except,
   too-many-nested-blocks,
-  invalid-name,
-  no-self-use,
-  missing-function-docstring,
-  missing-module-docstring,
-  missing-class-docstring,
-  consider-using-enumerate,
-  fixme
+  invalid-name
 
 [FORMAT]
 expected-line-ending-format=LF

@@ -10,7 +10,7 @@ from .config import TrainingConfig
 
 _LOGGER = logging.getLogger("glow_tts_train.export_onnx")
 
-OPSET_VERSION = 12
+OPSET_VERSION = 11
 
 # -----------------------------------------------------------------------------
 
@@ -52,7 +52,7 @@ def main():
 
     # Load checkpoint
     _LOGGER.debug("Loading checkpoint from %s", args.checkpoint)
-    checkpoint = load_checkpoint(args.checkpoint, config)
+    checkpoint = load_checkpoint(args.checkpoint, config, load_optimizer=False)
     model = checkpoint.model
 
     _LOGGER.info(
@@ -107,7 +107,8 @@ def main():
         dummy_input,
         str(args.output / "generator.onnx"),
         opset_version=OPSET_VERSION,
-        do_constant_folding=True,
+        do_constant_folding=False,
+        enable_onnx_checker=True,
         input_names=["input", "input_lengths", "scales"],
         output_names=["output"],
         dynamic_axes={
