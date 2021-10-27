@@ -190,8 +190,8 @@ class GlowTTSTraining(pl.LightningModule):
 
         return loss_g
 
-    # def validation_step(self, val_batch: Batch, batch_idx):
-    #     return self.training_step(val_batch, batch_idx, optimizer_idx=0)
+    def validation_step(self, val_batch: Batch, batch_idx: int):
+        return self.training_step(val_batch, batch_idx)
 
     # def test_step(self, test_batch: Batch, batch_idx, optimizer_idx):
     #     y_hat, *_ = self.net_g.infer(
@@ -209,16 +209,15 @@ class GlowTTSTraining(pl.LightningModule):
             num_workers=8,
         )
 
-    # def val_dataloader(self):
-    #     return DataLoader(
-    #         self.val_dataset,
-    #         shuffle=False,
-    #         batch_size=self.config.batch_size,
-    #         # pin_memory=True,
-    #         drop_last=False,
-    #         collate_fn=self.collate_fn,
-    #         num_workers=8,
-    #     )
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            shuffle=False,
+            drop_last=False,
+            batch_size=self.config.batch_size,
+            collate_fn=self.collate_fn,
+            num_workers=8,
+        )
 
     # def test_dataloader(self):
     #     return DataLoader(
@@ -239,7 +238,7 @@ def main():
     logging.basicConfig(level=logging.DEBUG)
 
     model_dir = Path("local/ljspeech-lightning")
-    audio_dir = Path("/home/hansenm/opt/vits-train/data/ljspeech/wavs")
+    audio_dir = Path("data/ljspeech/wavs")
     cache_dir = model_dir / "cache"
 
     train_path = model_dir / "train.csv"
@@ -297,7 +296,13 @@ def main():
         test_ids=test_ids,
         cache_dir=cache_dir,
     )
-    trainer = pl.Trainer(gpus=1, precision=16)
+
+    trainer = pl.Trainer(
+        gpus=torch.cuda.device_count(),
+        precision=(16 if config.fp16_run else 32),
+        accelerator="ddp",
+        callbacks=[pl.callbacks.ModelCheckpoint(dirpath=model_dir)],
+    )
     trainer.fit(model)
 
 
