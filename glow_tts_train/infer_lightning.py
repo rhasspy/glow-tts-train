@@ -2,6 +2,8 @@
 import argparse
 import logging
 import os
+import csv
+import io
 import re
 import sys
 import time
@@ -138,14 +140,20 @@ def main():
     model.eval()
 
     # Multispeaker
-    if config.model.n_speakers > 1:
-        if args.speaker is None:
-            args.speaker = 0
+    multispeaker = config.model.n_speakers > 1
+    if multispeaker and (args.speaker is None):
+        args.speaker = 0
 
     # -------------------------------------------------------------------------
 
     if os.isatty(sys.stdin.fileno()):
         print("Reading whitespace-separated phoneme ids from stdin...", file=sys.stderr)
+
+    csv_reader = None
+    csv_file = None
+    if args.csv:
+        csv_file = io.StringIO()
+        csv_reader = csv.reader(csv_file, delimiter="|")
 
     # Read phoneme ids from standard input.
     # Phoneme ids are separated by whitespace (<p1> <p2> ...)
@@ -160,12 +168,18 @@ def main():
 
             if args.csv:
                 # Input format is id | p1 p2 p3...
-                line_parts = line.split("|", maxsplit=3)
-                utt_id = line_parts[0]
-                line = line_parts[-1]
+                print(line, file=csv_file, flush=True)
+                csv_file.seek(0)
+                row = next(csv_reader)
 
-                if (len(line_parts) > 2) and (config.model.n_speakers > 1):
-                    speaker_num = int(line_parts[1])
+                csv_file.truncate(0)
+                csv_file.seek(0)
+
+                utt_id = row[0]
+                line = row[-1]
+
+                if multispeaker and (len(row) > 2):
+                    speaker_num = int(row[1])
 
             if args.text:
                 # Map phonemes to ids
