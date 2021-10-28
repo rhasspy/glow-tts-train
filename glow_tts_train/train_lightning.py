@@ -44,9 +44,14 @@ class GlowTTSTraining(pl.LightningModule):
         self.utt_speaker_ids = utt_speaker_ids if utt_speaker_ids is not None else {}
 
         self.generator = None
+
         self.collate_fn = UtteranceCollate()
 
-    def prepare_data(self):
+    def setup(self, stage):
+        self.generator = setup_model(self.config)
+        self.generator.cuda()
+
+        _LOGGER.debug("Filtering data")
         # Filter utterances based on min/max settings in config
         drop_utt_ids: typing.Set[str] = set()
 
@@ -168,10 +173,6 @@ class GlowTTSTraining(pl.LightningModule):
             cache_dir=self.cache_dir,
         )
 
-    def setup(self, stage):
-        self.generator = setup_model(self.config)
-        self.generator.to(self.device)
-
         # DDI
         _LOGGER.debug("Doing data-dependent initialization...")
         for flow in self.generator.decoder.flows:
@@ -181,11 +182,11 @@ class GlowTTSTraining(pl.LightningModule):
         self.generator.train()
         for ddi_batch in self.train_dataloader():
             x, x_lengths, y, y_lengths, g = (
-                ddi_batch.phoneme_ids.to(self.device),
-                ddi_batch.phoneme_lengths.to(self.device),
-                ddi_batch.spectrograms.to(self.device),
-                ddi_batch.spectrogram_lengths.to(self.device),
-                ddi_batch.speaker_ids.to(self.device)
+                ddi_batch.phoneme_ids.cuda(),
+                ddi_batch.phoneme_lengths.cuda(),
+                ddi_batch.spectrograms.cuda(),
+                ddi_batch.spectrogram_lengths.cuda(),
+                ddi_batch.speaker_ids.cuda()
                 if ddi_batch.speaker_ids is not None
                 else None,
             )
@@ -239,7 +240,7 @@ class GlowTTSTraining(pl.LightningModule):
     def train_dataloader(self):
         return DataLoader(
             self.train_dataset,
-            shuffle=True,
+            shuffle=False,
             pin_memory=True,
             batch_size=self.config.batch_size,
             collate_fn=self.collate_fn,
@@ -287,6 +288,7 @@ def main():
     with open(config_path, "r", encoding="utf-8") as config_file:
         config = TrainingConfig.load(config_file)
 
+    torch.manual_seed(config.seed)
     multispeaker = config.model.n_speakers > 1
 
     phoneme_to_id = {}
@@ -353,6 +355,7 @@ def main():
         accelerator="ddp",
         callbacks=[pl.callbacks.ModelCheckpoint(dirpath=model_dir)],
         gradient_clip_val=config.grad_clip,
+        plugins=pl.plugins.DDPPlugin(find_unused_parameters=False),
     )
     trainer.fit(model)
 
