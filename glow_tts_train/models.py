@@ -231,7 +231,7 @@ class FlowGenerator(nn.Module):
         dilation_rate: int = 5,
         n_block_layers: int = 4,
         p_dropout_dec: float = 0.0,
-        n_speakers: int = 0,
+        n_speakers: int = 1,
         gin_channels: int = 0,
         n_split: int = 4,
         n_sqz: int = 1,

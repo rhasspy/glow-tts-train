@@ -239,7 +239,7 @@ class ModelConfig(DataClassJsonMixin):
 class TrainingConfig(DataClassJsonMixin):
     seed: int = 1234
     epochs: int = 10000
-    learning_rate: float = 2e-4
+    learning_rate: float = 1e-3
     betas: typing.Tuple[float, float] = field(default=(0.8, 0.99))
     eps: float = 1e-9
     grad_clip: float = 5.0

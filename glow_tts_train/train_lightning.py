@@ -34,127 +34,151 @@ class GlowTTSTraining(pl.LightningModule):
         super().__init__()
 
         self.config = config
+
+        self.utt_phoneme_ids = utt_phoneme_ids
         self.cache_dir = cache_dir
         self.audio_dir = Path(audio_dir)
+        self.train_ids = train_ids
+        self.val_ids = val_ids
+        self.test_ids = test_ids
         self.utt_speaker_ids = utt_speaker_ids if utt_speaker_ids is not None else {}
 
-        self.generator = setup_model(config)
+        self.generator = None
         self.collate_fn = UtteranceCollate()
 
-        # Filter utterances based on min/max settings in config
-        drop_utt_ids: typing.Set[str] = set()
+        def prepare_data(self):
+            # Filter utterances based on min/max settings in config
+            drop_utt_ids: typing.Set[str] = set()
 
-        num_phonemes_too_small = 0
-        num_phonemes_too_large = 0
-        num_audio_missing = 0
+            num_phonemes_too_small = 0
+            num_phonemes_too_large = 0
+            num_audio_missing = 0
 
-        for utt_id, phoneme_ids in utt_phoneme_ids.items():
-            # Check phonemes length
-            if (self.config.min_seq_length is not None) and (
-                len(phoneme_ids) < self.config.min_seq_length
-            ):
-                drop_utt_ids.add(utt_id)
-                num_phonemes_too_small += 1
-                continue
+            for utt_id, phoneme_ids in self.utt_phoneme_ids.items():
+                # Check phonemes length
+                if (self.config.min_seq_length is not None) and (
+                    len(phoneme_ids) < self.config.min_seq_length
+                ):
+                    drop_utt_ids.add(utt_id)
+                    num_phonemes_too_small += 1
+                    continue
 
-            if (self.config.max_seq_length is not None) and (
-                len(phoneme_ids) > self.config.max_seq_length
-            ):
-                drop_utt_ids.add(utt_id)
-                num_phonemes_too_large += 1
-                continue
+                if (self.config.max_seq_length is not None) and (
+                    len(phoneme_ids) > self.config.max_seq_length
+                ):
+                    drop_utt_ids.add(utt_id)
+                    num_phonemes_too_large += 1
+                    continue
 
-            # Check if audio file is missing
-            audio_path = self.audio_dir / utt_id
-            if not audio_path.is_file():
-                # Try WAV extension
-                audio_path = self.audio_dir / f"{utt_id}.wav"
+                # Check if audio file is missing
+                audio_path = self.audio_dir / utt_id
+                if not audio_path.is_file():
+                    # Try WAV extension
+                    audio_path = self.audio_dir / f"{utt_id}.wav"
 
-            if not audio_path.is_file():
-                drop_utt_ids.add(utt_id)
-                _LOGGER.warning(
-                    "Dropped %s because audio file is missing: %s", utt_id, audio_path
-                )
-                continue
+                if not audio_path.is_file():
+                    drop_utt_ids.add(utt_id)
+                    _LOGGER.warning(
+                        "Dropped %s because audio file is missing: %s",
+                        utt_id,
+                        audio_path,
+                    )
+                    continue
 
-        # Filter out dropped utterances
-        if drop_utt_ids:
-            _LOGGER.info("Dropped %s utterance(s)", len(drop_utt_ids))
+            # Filter out dropped utterances
+            if drop_utt_ids:
+                _LOGGER.info("Dropped %s utterance(s)", len(drop_utt_ids))
 
-            if num_phonemes_too_small > 0:
-                _LOGGER.debug(
-                    "%s utterance(s) dropped whose phoneme length was smaller than %s",
-                    num_phonemes_too_small,
-                    self.config.min_seq_length,
-                )
+                if num_phonemes_too_small > 0:
+                    _LOGGER.debug(
+                        "%s utterance(s) dropped whose phoneme length was smaller than %s",
+                        num_phonemes_too_small,
+                        self.config.min_seq_length,
+                    )
 
-            if num_phonemes_too_large > 0:
-                _LOGGER.debug(
-                    "%s utterance(s) dropped whose phoneme length was larger than %s",
-                    num_phonemes_too_large,
-                    self.config.max_seq_length,
-                )
+                if num_phonemes_too_large > 0:
+                    _LOGGER.debug(
+                        "%s utterance(s) dropped whose phoneme length was larger than %s",
+                        num_phonemes_too_large,
+                        self.config.max_seq_length,
+                    )
 
-            if num_audio_missing > 0:
-                _LOGGER.debug(
-                    "%s utterance(s) dropped whose audio file was missing",
-                    num_audio_missing,
-                )
+                if num_audio_missing > 0:
+                    _LOGGER.debug(
+                        "%s utterance(s) dropped whose audio file was missing",
+                        num_audio_missing,
+                    )
 
-            utt_phoneme_ids = {
-                utt_id: phoneme_ids
-                for utt_id, phoneme_ids in utt_phoneme_ids.items()
-                if utt_id not in drop_utt_ids
-            }
-        else:
-            _LOGGER.info("Kept all %s utterances", len(utt_phoneme_ids))
+                self.utt_phoneme_ids = {
+                    utt_id: phoneme_ids
+                    for utt_id, phoneme_ids in self.utt_phoneme_ids.items()
+                    if utt_id not in drop_utt_ids
+                }
+            else:
+                _LOGGER.info("Kept all %s utterances", len(utt_phoneme_ids))
 
-        assert utt_phoneme_ids, "No utterances after filtering"
+            assert utt_phoneme_ids, "No utterances after filtering"
 
-        train_ids = set(train_ids) - drop_utt_ids
-        assert train_ids, "No training utterances after filtering"
+            self.train_ids = set(self.train_ids) - drop_utt_ids
+            assert self.train_ids, "No training utterances after filtering"
 
-        val_ids = set(val_ids) - drop_utt_ids
-        assert val_ids, "No validation utterances after filtering"
+            self.val_ids = set(self.val_ids) - drop_utt_ids
+            assert self.val_ids, "No validation utterances after filtering"
 
-        test_ids = set(test_ids) - drop_utt_ids
-        # assert test_ids, "No testing utterances after filtering"
+            self.test_ids = set(self.test_ids) - drop_utt_ids
+            # assert self.test_ids, "No testing utterances after filtering"
 
-        self.train_dataset = PhonemeIdsAndMelsDataset(
-            config=self.config,
-            utt_phoneme_ids={utt_id: utt_phoneme_ids[utt_id] for utt_id in train_ids},
-            audio_dir=self.audio_dir,
-            utt_speaker_ids={
-                utt_id: self.utt_speaker_ids[utt_id]
-                for utt_id in train_ids
-                if utt_id in self.utt_speaker_ids
-            },
-            cache_dir=cache_dir,
-        )
+            self.train_dataset = PhonemeIdsAndMelsDataset(
+                config=self.config,
+                utt_phoneme_ids={
+                    utt_id: self.utt_phoneme_ids[utt_id] for utt_id in self.train_ids
+                },
+                audio_dir=self.audio_dir,
+                utt_speaker_ids={
+                    utt_id: self.utt_speaker_ids[utt_id]
+                    for utt_id in self.train_ids
+                    if utt_id in self.utt_speaker_ids
+                },
+                cache_dir=self.cache_dir,
+            )
 
-        self.val_dataset = PhonemeIdsAndMelsDataset(
-            config=self.config,
-            utt_phoneme_ids={utt_id: utt_phoneme_ids[utt_id] for utt_id in val_ids},
-            audio_dir=self.audio_dir,
-            utt_speaker_ids={
-                utt_id: self.utt_speaker_ids[utt_id]
-                for utt_id in val_ids
-                if utt_id in self.utt_speaker_ids
-            },
-            cache_dir=cache_dir,
-        )
+            self.val_dataset = PhonemeIdsAndMelsDataset(
+                config=self.config,
+                utt_phoneme_ids={
+                    utt_id: self.utt_phoneme_ids[utt_id] for utt_id in self.val_ids
+                },
+                audio_dir=self.audio_dir,
+                utt_speaker_ids={
+                    utt_id: self.utt_speaker_ids[utt_id]
+                    for utt_id in self.val_ids
+                    if utt_id in self.utt_speaker_ids
+                },
+                cache_dir=self.cache_dir,
+            )
 
-        self.test_dataset = PhonemeIdsAndMelsDataset(
-            config=self.config,
-            utt_phoneme_ids={utt_id: utt_phoneme_ids[utt_id] for utt_id in test_ids},
-            audio_dir=self.audio_dir,
-            utt_speaker_ids={
-                utt_id: self.utt_speaker_ids[utt_id]
-                for utt_id in test_ids
-                if utt_id in self.utt_speaker_ids
-            },
-            cache_dir=cache_dir,
-        )
+            self.test_dataset = PhonemeIdsAndMelsDataset(
+                config=self.config,
+                utt_phoneme_ids={
+                    utt_id: self.utt_phoneme_ids[utt_id] for utt_id in self.test_ids
+                },
+                audio_dir=self.audio_dir,
+                utt_speaker_ids={
+                    utt_id: self.utt_speaker_ids[utt_id]
+                    for utt_id in self.test_ids
+                    if utt_id in self.utt_speaker_ids
+                },
+                cache_dir=self.cache_dir,
+            )
+
+    def setup(self, stage):
+        self.generator = setup_model(config)
+
+        # DDI
+        # for flow in self.net_g.decoder.flows:
+        #     if getattr(flow, "set_ddi", False):
+        #         flow.set_ddi(True)
+
+        # self.net_g.train()
 
     def forward(self, *args, **kwargs):
         return self.net_g(*args, **kwargs)
@@ -241,13 +265,15 @@ def main():
     audio_dir = Path("data/ljspeech/wavs")
     cache_dir = model_dir / "cache"
 
-    train_path = model_dir / "train.csv"
-    val_path = model_dir / "val.csv"
-    test_path = model_dir / "test.csv"
+    train_path = model_dir / "train_ids.csv"
+    val_path = model_dir / "val_ids.csv"
+    # test_path = model_dir / "test_ids.csv"
 
     config_path = model_dir / "config.json"
     with open(config_path, "r", encoding="utf-8") as config_file:
         config = TrainingConfig.load(config_file)
+
+    multispeaker = config.model.n_speakers > 1
 
     phoneme_to_id = {}
     phonemes_path = model_dir / "phonemes.txt"
@@ -264,7 +290,10 @@ def main():
                 phoneme_id = int(phoneme_id)
                 phoneme_to_id[phoneme] = phoneme_id
 
+    id_to_phoneme = {i: p for p, i in phoneme_to_id.items()}
+
     utt_phoneme_ids = {}
+    utt_speaker_ids = {}
     train_ids = []
     val_ids = []
     test_ids = []
@@ -277,19 +306,26 @@ def main():
         with open(csv_path, "r", encoding="utf-8") as csv_file:
             reader = csv.reader(csv_file, delimiter="|")
             for row_idx, row in enumerate(reader):
-                # TODO: speaker
                 assert len(row) > 1, f"{row} in {csv_path}:{row_idx+1}"
-                utt_id, phonemes = row[0], row[1]
-                phoneme_ids = [phoneme_to_id[p] for p in phonemes if p in phoneme_to_id]
+                utt_id, phonemes = row[0], row[-1]
+
+                if multispeaker:
+                    assert len(row) > 2, f"{row} in {csv_path}:{row_idx+1}"
+                    utt_speaker_ids[utt_id] = row[1]
+
+                # phoneme_ids = [phoneme_to_id[p] for p in phonemes if p in phoneme_to_id]
+                phoneme_ids = [int(p_id) for p_id in phonemes.split()]
+                phoneme_ids = [p_id for p_id in phoneme_ids if p_id in id_to_phoneme]
 
                 assert phoneme_ids, utt_id
-                phoneme_ids = intersperse(phoneme_ids, 0)
+                # phoneme_ids = intersperse(phoneme_ids, 0)
                 utt_phoneme_ids[utt_id] = phoneme_ids
                 ids.append(utt_id)
 
     model = GlowTTSTraining(
         config=config,
         utt_phoneme_ids=utt_phoneme_ids,
+        utt_speaker_ids=utt_speaker_ids,
         audio_dir=audio_dir,
         train_ids=train_ids,
         val_ids=val_ids,
@@ -302,6 +338,8 @@ def main():
         precision=(16 if config.fp16_run else 32),
         accelerator="ddp",
         callbacks=[pl.callbacks.ModelCheckpoint(dirpath=model_dir)],
+        gradient_clip_val=config.grad_clip,
+        find_unused_parameters=True,
     )
     trainer.fit(model)
 
