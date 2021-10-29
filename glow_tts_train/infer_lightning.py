@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 import argparse
-import logging
-import os
 import csv
 import io
+import logging
+import os
 import re
 import sys
 import time
@@ -22,7 +22,7 @@ _LOGGER = logging.getLogger("glow_tts_train.infer")
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("model_dir", help="Path to model directory")
+    parser.add_argument("model_dir", help="Path to model directory or checkpoint")
     parser.add_argument(
         "--output-dir",
         help="Directory to write WAV file(s) (default: current directory)",
@@ -55,6 +55,11 @@ def main():
 
     # Convert to paths
     args.model_dir = Path(args.model_dir)
+    if args.model_dir.is_file():
+        checkpoint_path = args.model_dir
+        args.model_dir = args.model_dir.parent
+    else:
+        checkpoint_path = args.model_dir / "generator.pth"
 
     if args.output_dir:
         args.output_dir = Path(args.output_dir)
@@ -101,7 +106,6 @@ def main():
     start_time = time.perf_counter()
 
     # Checkpoint
-    checkpoint_path = args.model_dir / "generator.pth"
     _LOGGER.debug("Loading checkpoint from %s", checkpoint_path)
     checkpoint_dict = torch.load(str(checkpoint_path), map_location="cpu")
 

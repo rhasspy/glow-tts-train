@@ -7,11 +7,11 @@ import torch
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
-from .checkpoint import Checkpoint, save_checkpoint
-from .config import TrainingConfig
-from .models import ModelType, setup_model
-from .optimize import OptimizerType
-from .utils import clip_grad_value_, duration_loss, mle_loss, to_gpu
+from glow_tts_train.checkpoint import Checkpoint, save_checkpoint
+from glow_tts_train.config import TrainingConfig
+from glow_tts_train.dataset import Batch
+from glow_tts_train.models import ModelType, setup_model, setup_optimizer
+from glow_tts_train.utils import duration_loss, mle_loss, to_gpu
 
 _LOGGER = logging.getLogger("glow_tts_train")
 
@@ -20,20 +20,27 @@ _LOGGER = logging.getLogger("glow_tts_train")
 
 def train(
     train_loader: DataLoader,
+    val_loader: DataLoader,
     config: TrainingConfig,
     model_dir: Path,
     model: typing.Optional[ModelType] = None,
-    optimizer: typing.Optional[OptimizerType] = None,
+    optimizer: typing.Optional[torch.optim.Optimizer] = None,
     global_step: int = 1,
-    checkpoint_epochs: int = 1,
+    checkpoint_epochs: int = 100,
+    val_epochs: int = 1,
     rank: int = 0,
 ):
     """Run training for the specified number of epochs"""
     torch.manual_seed(config.seed)
 
-    model, optimizer = setup_model(config, model=model, optimizer=optimizer)
-    assert optimizer is not None
+    if model is None:
+        model = setup_model(config)
+
+    if optimizer is None:
+        optimizer = setup_optimizer(config, model)
+
     assert model is not None
+    assert optimizer is not None
 
     # Gradient scaler
     scaler = GradScaler() if config.fp16_run else None
@@ -41,6 +48,7 @@ def train(
         _LOGGER.info("Using fp16 scaler")
 
     # Begin training
+    best_val_loss = None
     for epoch in range(1, config.epochs + 1):
         _LOGGER.debug(
             "Begin epoch %s/%s (global step=%s)", epoch, config.epochs, global_step
@@ -57,6 +65,30 @@ def train(
             scaler=scaler,
         )
 
+        if ((epoch % val_epochs) == 0) and (rank == 0):
+            _LOGGER.debug("Running validation")
+            val_loss = val_step(
+                model=model,
+                config=config,
+                val_loader=val_loader,
+                fp16_run=config.fp16_run,
+            )
+
+            if (best_val_loss is None) or (val_loss < best_val_loss):
+                best_path = model_dir / "best_model.pth"
+                _LOGGER.debug("Saving best model to %s", best_path)
+                save_checkpoint(
+                    Checkpoint(
+                        model=model,
+                        optimizer=optimizer,
+                        global_step=global_step,
+                        version=config.version,
+                    ),
+                    best_path,
+                )
+
+                best_val_loss = val_loss
+
         if ((epoch % checkpoint_epochs) == 0) and (rank == 0):
             # Save checkpoint
             checkpoint_path = model_dir / f"checkpoint_{global_step}.pth"
@@ -65,19 +97,11 @@ def train(
                 Checkpoint(
                     model=model,
                     optimizer=optimizer,
-                    learning_rate=optimizer.cur_lr,
                     global_step=global_step,
                     version=config.version,
                 ),
                 checkpoint_path,
             )
-
-            # Save checkpoint config
-            config_path = model_dir / f"config_{global_step}.json"
-            with open(config_path, "w") as config_file:
-                config.save(config_file)
-
-            _LOGGER.info("Saved checkpoint to %s", checkpoint_path)
 
         epoch_end_time = time.perf_counter()
         _LOGGER.debug(
@@ -92,23 +116,25 @@ def train_step(
     global_step: int,
     epoch: int,
     model: ModelType,
-    optimizer: OptimizerType,
+    optimizer: torch.optim.Optimizer,
     config: TrainingConfig,
     train_loader: DataLoader,
     fp16_run: bool,
     scaler: typing.Optional[GradScaler] = None,
 ):
-    # train_loader.sampler.set_epoch(epoch)
     steps_per_epoch = len(train_loader)
     all_loss_g: typing.List[float] = []
 
     model.train()
-    for batch_idx, (x, x_lengths, y, y_lengths, speaker_ids) in enumerate(train_loader):
-        x, x_lengths = (to_gpu(x), to_gpu(x_lengths))
-        y, y_lengths = (to_gpu(y), to_gpu(y_lengths))
-
-        if speaker_ids is not None:
-            speaker_ids = to_gpu(speaker_ids)
+    for batch_idx, batch in enumerate(train_loader):
+        batch = typing.cast(Batch, batch)
+        x, x_lengths, y, y_lengths, speaker_ids = (
+            to_gpu(batch.phoneme_ids),
+            to_gpu(batch.phoneme_lengths),
+            to_gpu(batch.spectrograms),
+            to_gpu(batch.spectrogram_lengths),
+            to_gpu(batch.speaker_ids) if batch.speaker_ids is not None else None,
+        )
 
         # Train model
         optimizer.zero_grad()
@@ -124,8 +150,6 @@ def train_step(
             l_mle = mle_loss(z, z_m, z_logs, logdet, z_mask)
             l_length = duration_loss(logw, logw_, x_lengths)
 
-            # TODO: Weighted loss
-            # loss_gs = [l_mle, l_length]
             loss_g = l_mle + l_length
 
         all_loss_g.append(loss_g.item())
@@ -134,15 +158,14 @@ def train_step(
             # Float16
             assert scaler is not None
             scaler.scale(loss_g).backward()
-            scaler.unscale_(optimizer._optim)  # pylint: disable=protected-access
-            clip_grad_value_(model.parameters(), config.grad_clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
 
-            scaler.step(optimizer._optim)  # pylint: disable=protected-access
+            scaler.step(optimizer)
             scaler.update()
         else:
             # Float32
             loss_g.backward()
-            clip_grad_value_(model.parameters(), config.grad_clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
             optimizer.step()
 
         _LOGGER.debug(
@@ -160,3 +183,43 @@ def train_step(
         )
 
     return global_step
+
+
+def val_step(
+    model: ModelType, config: TrainingConfig, val_loader: DataLoader, fp16_run: bool,
+):
+    all_loss_g: typing.List[float] = []
+
+    model.eval()
+    for batch in val_loader:
+        batch = typing.cast(Batch, batch)
+        x, x_lengths, y, y_lengths, speaker_ids = (
+            to_gpu(batch.phoneme_ids),
+            to_gpu(batch.phoneme_lengths),
+            to_gpu(batch.spectrograms),
+            to_gpu(batch.spectrogram_lengths),
+            to_gpu(batch.speaker_ids) if batch.speaker_ids is not None else None,
+        )
+
+        with autocast(enabled=fp16_run):
+            (
+                (z, z_m, z_logs, logdet, z_mask),
+                (_x_m, _x_logs, _x_mask),
+                (_attn, logw, logw_),
+            ) = model(x, x_lengths, y, y_lengths, g=speaker_ids)
+
+            # Compute loss
+            l_mle = mle_loss(z, z_m, z_logs, logdet, z_mask)
+            l_length = duration_loss(logw, logw_, x_lengths)
+
+            loss_g = l_mle + l_length
+
+        all_loss_g.append(loss_g.item())
+
+    if all_loss_g:
+        avg_loss_g = sum(all_loss_g) / len(all_loss_g)
+        _LOGGER.debug("Average validation loss: %s", avg_loss_g)
+
+        return avg_loss_g
+
+    return 0.0

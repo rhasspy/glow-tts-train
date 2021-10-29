@@ -449,3 +449,9 @@ def setup_model(
         model.cuda()
 
     return model
+
+
+def setup_optimizer(config: TrainingConfig, model: ModelType) -> torch.optim.Optimizer:
+    return torch.optim.AdamW(
+        model.parameters(), config.learning_rate, betas=config.betas, eps=config.eps,
+    )

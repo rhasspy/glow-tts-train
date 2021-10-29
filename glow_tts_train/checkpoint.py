@@ -6,9 +6,8 @@ from pathlib import Path
 
 import torch
 
-from .config import TrainingConfig
-from .models import ModelType, setup_model
-from .optimize import OptimizerType
+from glow_tts_train.config import TrainingConfig
+from glow_tts_train.models import ModelType, setup_model, setup_optimizer
 
 _LOGGER = logging.getLogger("glow_tts_train.checkpoint")
 
@@ -18,10 +17,9 @@ _LOGGER = logging.getLogger("glow_tts_train.checkpoint")
 @dataclass
 class Checkpoint:
     model: ModelType
-    learning_rate: float
     global_step: int
     version: int
-    optimizer: typing.Optional[OptimizerType] = None
+    optimizer: typing.Optional[torch.optim.Optimizer] = None
 
 
 def save_checkpoint(checkpoint: Checkpoint, checkpoint_path: Path):
@@ -38,7 +36,6 @@ def save_checkpoint(checkpoint: Checkpoint, checkpoint_path: Path):
     checkpoint_dict = {
         "model": state_dict,
         "global_step": checkpoint.global_step,
-        "learning_rate": checkpoint.learning_rate,
         "version": checkpoint.version,
     }
 
@@ -52,7 +49,7 @@ def load_checkpoint(
     checkpoint_path: Path,
     config: TrainingConfig,
     model: typing.Optional[ModelType] = None,
-    optimizer: typing.Optional[OptimizerType] = None,
+    optimizer: typing.Optional[torch.optim.Optimizer] = None,
     load_optimizer: bool = True,
     use_cuda: bool = True,
 ) -> Checkpoint:
@@ -60,19 +57,16 @@ def load_checkpoint(
     checkpoint_dict = torch.load(checkpoint_path, map_location="cpu")
     version = int(checkpoint_dict.get("version", 1))
     global_step = int(checkpoint_dict.get("global_step", 1))
-    learning_rate = float(checkpoint_dict.get("learning_rate", 1.0))
 
     # Create model/optimizer if necessary
-    model, optimizer = setup_model(
-        config,
-        model=model,
-        optimizer=optimizer,
-        create_optimizer=load_optimizer,
-        use_cuda=use_cuda,
-    )
+    if model is None:
+        model = setup_model(config, use_cuda=use_cuda)
 
     # Load optimizer state
-    if load_optimizer and (optimizer is not None):
+    if load_optimizer:
+        if optimizer is None:
+            optimizer = setup_optimizer(config, model)
+
         optimizer.load_state_dict(checkpoint_dict["optimizer"])
 
     saved_state_dict = checkpoint_dict["model"]
@@ -98,9 +92,5 @@ def load_checkpoint(
         model.load_state_dict(new_state_dict)
 
     return Checkpoint(
-        model=model,
-        optimizer=optimizer,
-        learning_rate=learning_rate,
-        global_step=global_step,
-        version=version,
+        model=model, optimizer=optimizer, global_step=global_step, version=version,
     )

@@ -118,7 +118,7 @@ class GlowTTSTraining(pl.LightningModule):
                 if utt_id not in drop_utt_ids
             }
         else:
-            _LOGGER.info("Kept all %s utterances", len(utt_phoneme_ids))
+            _LOGGER.info("Kept all %s utterances", len(self.utt_phoneme_ids))
 
         assert self.utt_phoneme_ids, "No utterances after filtering"
 

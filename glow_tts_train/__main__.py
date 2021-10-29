@@ -2,7 +2,6 @@
 import argparse
 import logging
 import random
-import sys
 import typing
 from pathlib import Path
 
@@ -11,13 +10,17 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-from .checkpoint import load_checkpoint
-from .config import TrainingConfig
-from .dataset import PhonemeMelCollate, PhonemeMelLoader, load_mels, load_phonemes
-from .ddi import initialize_model
-from .models import ModelType
-from .optimize import OptimizerType
-from .train import train
+from glow_tts_train.checkpoint import load_checkpoint
+from glow_tts_train.config import TrainingConfig
+from glow_tts_train.dataset import (
+    PhonemeIdsAndMelsDataset,
+    UtteranceCollate,
+    load_dataset,
+)
+from glow_tts_train.ddi import initialize_model
+from glow_tts_train.models import ModelType
+from glow_tts_train.optimize import OptimizerType
+from glow_tts_train.train import train
 
 _LOGGER = logging.getLogger("glow_tts_train")
 
@@ -34,13 +37,8 @@ def main():
         nargs=3,
         action="append",
         default=[],
-        metavar=("speaker_id", "phonemes_csv", "mels"),
-        help="Speaker id, phonemes CSV, and JSONL file with mel spectrograms or directory with .npy files (--mels-dir)",
-    )
-    parser.add_argument(
-        "--mels-dir",
-        action="store_true",
-        help="mels argument is a directory with .npy files",
+        metavar=("dataset_name", "metadata_dir", "audio_dir"),
+        help="Speaker id, phonemes CSV, and directory with audio files",
     )
     parser.add_argument(
         "--config", action="append", help="Path to JSON configuration file(s)"
@@ -56,13 +54,12 @@ def main():
     parser.add_argument(
         "--checkpoint-epochs",
         type=int,
-        default=1,
+        default=100,
         help="Number of epochs between checkpoints",
     )
     parser.add_argument(
-        "--skip-missing-mels",
-        action="store_true",
-        help="Only warn about missing mel files",
+        "--cache",
+        help="Directory to store cached spectrograms (default: <output>/cache",
     )
     parser.add_argument(
         "--local_rank", type=int, help="Rank passed from torch.distributed.launch"
@@ -95,15 +92,27 @@ def main():
     # Convert to paths
     args.output = Path(args.output)
     args.dataset = [
-        (int(dataset_idx), Path(phonemes_path), Path(mels_path))
-        for dataset_idx, phonemes_path, mels_path in args.dataset
+        (dataset_name, Path(phonemes_path), Path(audio_dir))
+        for dataset_name, phonemes_path, audio_dir in args.dataset
     ]
 
     if args.config:
         args.config = [Path(p) for p in args.config]
+    else:
+        output_config_path = args.output / "config.json"
+        assert (
+            output_config_path.is_file()
+        ), f"No config file found at {output_config_path}"
+
+        args.config = [output_config_path]
 
     if args.checkpoint:
         args.checkpoint = Path(args.checkpoint)
+
+    if args.cache:
+        args.cache = Path(args.cache)
+    else:
+        args.cache = args.output / "cache"
 
     # Load configuration
     config = TrainingConfig()
@@ -120,12 +129,7 @@ def main():
 
     _LOGGER.debug("Setting random seed to %s", config.seed)
     random.seed(config.seed)
-
-    # Set num_symbols
-    if config.model.num_symbols < 1:
-        config.model.num_symbols = max(max(p_ids) for p_ids in id_phonemes.values()) + 1
-
-    assert config.model.num_symbols > 0, "No symbols"
+    torch.manual_seed(config.seed)
 
     if args.epochs is not None:
         # Use command-line option
@@ -148,107 +152,47 @@ def main():
             len(args.dataset),
         )
 
-    # Load mels
-    all_id_phonemes = {}
-    all_id_mels = {}
-    mel_dirs = {}
+    datasets = []
+    for dataset_name, metadata_dir, audio_dir in args.dataset:
+        metadata_dir = Path(metadata_dir)
+        audio_dir = Path(audio_dir)
 
-    for dataset_idx, phonemes_path, mels_path in args.dataset:
-        # Load phonemes
-        _LOGGER.debug(
-            "Loading phonemes from %s (speaker=%s)", phonemes_path, dataset_idx
+        datasets.append(
+            load_dataset(
+                config=config,
+                dataset_name=dataset_name,
+                metadata_dir=metadata_dir,
+                audio_dir=audio_dir,
+            )
         )
-
-        with open(phonemes_path, "r") as phonemes_file:
-            id_phonemes = load_phonemes(phonemes_file, config)
-
-        _LOGGER.info(
-            "Loaded phonemes for %s utterances (speaker=%s)",
-            len(id_phonemes),
-            dataset_idx,
-        )
-
-        # Load mels
-        id_mels = {}
-        if args.mels_dir:
-            _LOGGER.debug("Verifying mels in %s (speaker=%s)", mels_path, dataset_idx)
-            missing_ids = set()
-            for utt_id in id_phonemes:
-                mel_path = mels_path / (utt_id + ".npy")
-                if not mel_path.is_file():
-                    missing_ids.add(utt_id)
-
-            if missing_ids:
-                if args.skip_missing_mels:
-                    # Remove missing ids
-                    for missing_id in missing_ids:
-                        id_phonemes.pop(missing_id, None)
-
-                    _LOGGER.warning(
-                        "Missing %s/%s .npy file(s) for utterances (speaker=%s)",
-                        len(missing_ids),
-                        len(id_phonemes) + len(missing_ids),
-                        dataset_idx,
-                    )
-                else:
-                    _LOGGER.fatal(
-                        "Missing .npy files for utterances: %s (speaker=%s)",
-                        sorted(list(missing_ids)),
-                        dataset_idx,
-                    )
-                    sys.exit(1)
-
-            _LOGGER.info(
-                "Verified %s mel(s) in %s (speaker=%s)",
-                len(id_phonemes),
-                mels_path,
-                dataset_idx,
-            )
-            mel_dirs[dataset_idx] = mels_path
-        else:
-            # TODO: Verify audio configuration
-            _LOGGER.debug(
-                "Loading JSONL mels from %s (speaker=%s)", mels_path, dataset_idx
-            )
-
-            with open(mels_path, "r") as mels_file:
-                id_mels = load_mels(mels_file)
-
-            _LOGGER.info(
-                "Loaded mels for %s utterances (speaker=%s)", len(id_mels), dataset_idx
-            )
-
-        # Merge with main set.
-        # Disambiguate utterance ids using dataset index (speaker id).
-        for utt_id in id_phonemes:
-            all_id_phonemes[(dataset_idx, utt_id)] = id_phonemes[utt_id]
-
-        for utt_id in id_mels:
-            all_id_mels[(dataset_idx, utt_id)] = id_mels[utt_id]
 
     # Create data loader
-    dataset = PhonemeMelLoader(
-        id_phonemes=all_id_phonemes,
-        id_mels=all_id_mels,
-        mel_dirs=mel_dirs,
-        multispeaker=(num_speakers > 1),
-    )
-    collate_fn = PhonemeMelCollate(
-        n_frames_per_step=config.model.n_frames_per_step,
-        multispeaker=(num_speakers > 1),
-    )
-
     batch_size = config.batch_size if args.batch_size is None else args.batch_size
-    sampler = DistributedSampler(dataset) if is_distributed else None
+    train_dataset = PhonemeIdsAndMelsDataset(
+        config, datasets, split="train", cache_dir=args.cache
+    )
+    val_dataset = PhonemeIdsAndMelsDataset(
+        config, datasets, split="val", cache_dir=args.cache
+    )
+    collate_fn = UtteranceCollate()
 
     train_loader = DataLoader(
-        dataset,
+        train_dataset,
         shuffle=(not is_distributed),
         batch_size=batch_size,
         pin_memory=True,
         drop_last=True,
         collate_fn=collate_fn,
-        sampler=sampler,
+        sampler=DistributedSampler(train_dataset) if is_distributed else None,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        shuffle=False,
+        batch_size=batch_size,
+        pin_memory=True,
+        drop_last=False,
+        collate_fn=collate_fn,
     )
 
     model: typing.Optional[ModelType] = None
@@ -259,7 +203,6 @@ def main():
         _LOGGER.debug("Loading checkpoint from %s", args.checkpoint)
         checkpoint = load_checkpoint(args.checkpoint, config)
         model, optimizer = checkpoint.model, checkpoint.optimizer
-        config.learning_rate = checkpoint.learning_rate
         global_step = checkpoint.global_step
         _LOGGER.info(
             "Loaded checkpoint from %s (global step=%s, learning rate=%s)",
@@ -284,9 +227,10 @@ def main():
 
     try:
         train(
-            train_loader,
-            config,
-            args.output,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            config=config,
+            model_dir=args.output,
             model=model,
             optimizer=optimizer,
             global_step=global_step,
