@@ -39,6 +39,7 @@ class UtteranceTensors:
 
 @dataclass
 class Batch:
+    utterance_ids: typing.Sequence[str]
     phoneme_ids: torch.LongTensor
     phoneme_lengths: torch.LongTensor
     spectrograms: torch.FloatTensor
@@ -210,6 +211,7 @@ class UtteranceCollate:
                 speaker_ids[utt_idx] = utt.speaker_id
 
         return Batch(
+            utterance_ids=[utt.id for utt in sorted_utterances],
             phoneme_ids=phonemes_padded,
             phoneme_lengths=phoneme_lengths,
             spectrograms=spec_padded,

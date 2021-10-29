@@ -1,6 +1,7 @@
 import logging
 import time
 import typing
+from collections import Counter
 from pathlib import Path
 
 import torch
@@ -49,6 +50,7 @@ def train(
 
     # Begin training
     best_val_loss = None
+
     for epoch in range(1, config.epochs + 1):
         _LOGGER.debug(
             "Begin epoch %s/%s (global step=%s)", epoch, config.epochs, global_step
@@ -124,6 +126,7 @@ def train_step(
 ):
     steps_per_epoch = len(train_loader)
     all_loss_g: typing.List[float] = []
+    bad_utterance_counts = Counter()
 
     model.train()
     for batch_idx, batch in enumerate(train_loader):
@@ -172,6 +175,12 @@ def train_step(
             "Loss: %s (step=%s/%s)", loss_g.item(), batch_idx + 1, steps_per_epoch
         )
         global_step += 1
+
+        if loss_g.item() > 0:
+            for utt_id in batch.utterance_ids:
+                bad_utterance_counts[utt_id] += 1
+
+            _LOGGER.debug("Bad utterances: %s", bad_utterance_counts.most_common(10))
 
     if all_loss_g:
         avg_loss_g = sum(all_loss_g) / len(all_loss_g)

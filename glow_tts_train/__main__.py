@@ -47,6 +47,12 @@ def main():
         "--batch-size", type=int, help="Batch size (default: use config)"
     )
     parser.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=16,
+        help="Evaluation batch size (default: 16)",
+    )
+    parser.add_argument(
         "--epochs", type=int, help="Number of epochs to run (default: use config)"
     )
     parser.add_argument("--checkpoint", help="Path to restore checkpoint")
@@ -189,8 +195,8 @@ def main():
     val_loader = DataLoader(
         val_dataset,
         shuffle=False,
-        batch_size=batch_size,
-        pin_memory=True,
+        batch_size=args.eval_batch_size,
+        pin_memory=False,
         drop_last=False,
         collate_fn=collate_fn,
     )
