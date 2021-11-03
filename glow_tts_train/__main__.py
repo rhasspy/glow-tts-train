@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import logging
+import os
 import random
 import typing
 from pathlib import Path
 
 import torch
+import torch.multiprocessing
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
@@ -19,7 +21,7 @@ from glow_tts_train.dataset import (
 )
 from glow_tts_train.ddi import initialize_model
 from glow_tts_train.models import ModelType
-from glow_tts_train.optimize import OptimizerType
+from glow_tts_train.optimize import OptimizerType, SchedulerType
 from glow_tts_train.train import train
 
 _LOGGER = logging.getLogger("glow_tts_train")
@@ -64,11 +66,18 @@ def main():
         help="Number of epochs between checkpoints",
     )
     parser.add_argument(
-        "--cache",
-        help="Directory to store cached spectrograms (default: <output>/cache",
+        "--no-restore-optimizer",
+        action="store_true",
+        help="Don't load the optimizer state from checkpoint",
     )
     parser.add_argument(
-        "--local_rank", type=int, help="Rank passed from torch.distributed.launch"
+        "--no-restore-scheduler",
+        action="store_true",
+        help="Don't load the scheduler state from checkpoint",
+    )
+    parser.add_argument(
+        "--cache",
+        help="Directory to store cached spectrograms (default: <output>/cache",
     )
     parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to the console"
@@ -86,11 +95,15 @@ def main():
 
     assert torch.cuda.is_available(), "GPU is required for training"
 
-    is_distributed = args.local_rank is not None
+    local_rank = os.environ.get("LOCAL_RANK")
+    if local_rank is not None:
+        local_rank = int(local_rank)
+
+    is_distributed = local_rank is not None
 
     if is_distributed:
-        _LOGGER.info("Setting up distributed run (rank=%s)", args.local_rank)
-        torch.cuda.set_device(args.local_rank)
+        _LOGGER.info("Setting up distributed run (rank=%s)", local_rank)
+        torch.cuda.set_device(local_rank)
         torch.distributed.init_process_group(backend="nccl", init_method="env://")
 
     # -------------------------------------------------------------------------
@@ -203,18 +216,37 @@ def main():
 
     model: typing.Optional[ModelType] = None
     optimizer: typing.Optional[OptimizerType] = None
-    global_step: int = 1
+    scheduler: typing.Optional[SchedulerType] = None
 
     if args.checkpoint:
-        _LOGGER.debug("Loading checkpoint from %s", args.checkpoint)
-        checkpoint = load_checkpoint(args.checkpoint, config)
-        model, optimizer = checkpoint.model, checkpoint.optimizer
-        global_step = checkpoint.global_step
-        _LOGGER.info(
-            "Loaded checkpoint from %s (global step=%s, learning rate=%s)",
+        _LOGGER.debug(
+            "Loading checkpoint from %s (optimizer=%s, scheduler=%s)",
             args.checkpoint,
-            global_step,
-            config.learning_rate,
+            not args.no_restore_optimizer,
+            not args.no_restore_scheduler,
+        )
+        checkpoint = load_checkpoint(
+            args.checkpoint,
+            config,
+            load_optimizer=(not args.no_restore_optimizer),
+            load_scheduler=(not args.no_restore_scheduler),
+        )
+        model, optimizer, scheduler = (
+            checkpoint.model,
+            checkpoint.optimizer,
+            checkpoint.scheduler,
+        )
+
+        config.global_step = checkpoint.global_step
+        config.last_epoch = checkpoint.epoch
+        config.best_loss = checkpoint.best_loss
+
+        _LOGGER.info(
+            "Loaded checkpoint from %s (epoch=%s, global step=%s, best loss=%s)",
+            args.checkpoint,
+            config.last_epoch,
+            config.global_step,
+            config.best_loss,
         )
     else:
         # Data-dependent initialization
@@ -223,7 +255,7 @@ def main():
 
     if is_distributed:
         model = DistributedDataParallel(
-            model, device_ids=[args.local_rank], output_device=args.local_rank
+            model, device_ids=[local_rank], output_device=local_rank
         )
 
     # Train
@@ -239,9 +271,9 @@ def main():
             model_dir=args.output,
             model=model,
             optimizer=optimizer,
-            global_step=global_step,
+            scheduler=scheduler,
             checkpoint_epochs=args.checkpoint_epochs,
-            rank=(args.local_rank if is_distributed else 0),
+            rank=(local_rank if is_distributed else 0),
         )
         _LOGGER.info("Training finished")
     except KeyboardInterrupt:

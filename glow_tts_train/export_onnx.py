@@ -52,7 +52,13 @@ def main():
 
     # Load checkpoint
     _LOGGER.debug("Loading checkpoint from %s", args.checkpoint)
-    checkpoint = load_checkpoint(args.checkpoint, config, load_optimizer=False)
+    checkpoint = load_checkpoint(
+        args.checkpoint,
+        config,
+        use_cuda=False,
+        load_optimizer=False,
+        load_scheduler=False,
+    )
     model = checkpoint.model
 
     _LOGGER.info(
@@ -95,8 +101,8 @@ def main():
     # Create dummy input
     sequences = torch.randint(
         low=0, high=config.model.num_symbols, size=(1, 50), dtype=torch.long
-    ).cuda()
-    sequence_lengths = torch.IntTensor([sequences.size(1)]).cuda().long()
+    )
+    sequence_lengths = torch.IntTensor([sequences.size(1)]).long()
     scales = torch.FloatTensor([0.667, 1.0])
 
     dummy_input = (sequences, sequence_lengths, scales)

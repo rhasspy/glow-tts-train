@@ -224,8 +224,8 @@ class ModelConfig(DataClassJsonMixin):
     n_sqz: int = 2
     prenet: bool = True
     mean_only: bool = True
-    hidden_channels_enc: int = 192
-    hidden_channels_dec: int = 192
+    hidden_channels_enc: typing.Optional[int] = None
+    hidden_channels_dec: typing.Optional[int] = None
     window_size: int = 4
     n_speakers: int = 1
     n_split: int = 4
@@ -239,14 +239,19 @@ class ModelConfig(DataClassJsonMixin):
 class TrainingConfig(DataClassJsonMixin):
     seed: int = 1234
     epochs: int = 10000
-    learning_rate: float = 1e-3
+    learning_rate: float = 1e0
     betas: typing.Tuple[float, float] = field(default=(0.8, 0.99))
+    weight_decay: float = 0.0
+    degenerated_to_sgd: bool = True
     eps: float = 1e-9
     grad_clip: float = 5.0
-    warmup_steps: int = 4000
-    scheduler: str = "noam"
+    warmup_steps: float = 4000
+    scheduler: str = ""
     batch_size: int = 32
     fp16_run: bool = False
+    last_epoch: int = 1
+    global_step: int = 1
+    best_loss: typing.Optional[float] = None
     min_seq_length: typing.Optional[int] = None
     max_seq_length: typing.Optional[int] = None
     audio: AudioConfig = field(default_factory=AudioConfig)

@@ -10,6 +10,7 @@ from glow_tts_train import monotonic_align
 from glow_tts_train.attentions import CouplingBlock, Encoder
 from glow_tts_train.config import TrainingConfig
 from glow_tts_train.layers import ActNorm, ConvReluNorm, InvConvNear, LayerNorm
+from glow_tts_train.optimize import OptimizerType, SchedulerType
 from glow_tts_train.utils import generate_path, sequence_mask, squeeze, unsqueeze
 
 _LOGGER = logging.getLogger("test")
@@ -414,7 +415,7 @@ ModelType = FlowGenerator
 
 
 def setup_model(
-    config: TrainingConfig, model_factory=ModelType, use_cuda: bool = True,
+    config: TrainingConfig, model_factory=ModelType, use_cuda: bool = True
 ) -> ModelType:
     # Create new generator
     model = model_factory(
@@ -451,7 +452,22 @@ def setup_model(
     return model
 
 
-def setup_optimizer(config: TrainingConfig, model: ModelType) -> torch.optim.Optimizer:
-    return torch.optim.AdamW(
-        model.parameters(), config.learning_rate, betas=config.betas, eps=config.eps,
+def setup_optimizer(config: TrainingConfig, model: ModelType) -> OptimizerType:
+    return OptimizerType(
+        model.parameters(),
+        lr=config.learning_rate,
+        betas=config.betas,
+        eps=config.eps,
+        scheduler="noam",
+        dim_model=config.model.hidden_channels,
+        # weight_decay=config.weight_decay,
+        # degenerated_to_sgd=config.degenerated_to_sgd,
+    )
+
+
+def setup_scheduler(config: TrainingConfig, optimizer: OptimizerType) -> SchedulerType:
+    return SchedulerType(
+        optimizer,
+        warmup_steps=config.warmup_steps,
+        dim_model=config.model.hidden_channels if config.scheduler == "noam" else None,
     )

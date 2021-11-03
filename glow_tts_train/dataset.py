@@ -228,6 +228,7 @@ def load_dataset(
     dataset_name: str,
     metadata_dir: typing.Union[str, Path],
     audio_dir: typing.Union[str, Path],
+    splits=("train", "val"),
 ) -> DatasetInfo:
     metadata_dir = Path(metadata_dir)
     audio_dir = Path(audio_dir)
@@ -235,7 +236,7 @@ def load_dataset(
 
     # Determine data paths
     data_paths = defaultdict(dict)
-    for split in ["train", "val", "test"]:
+    for split in splits:
         is_phonemes = False
         csv_path = metadata_dir / f"{split}_ids.csv"
         if not csv_path.is_file():
@@ -247,7 +248,7 @@ def load_dataset(
         data_paths[split]["utt_ids"] = []
 
     # train/val sets are required
-    for split in ["train", "val"]:
+    for split in splits:
         assert data_paths[split][
             "csv_path"
         ].is_file(), (
@@ -278,7 +279,7 @@ def load_dataset(
     utt_phoneme_ids = {}
     utt_speaker_ids = {}
 
-    for split in ["train", "val", "test"]:
+    for split in splits:
         csv_path = data_paths[split]["csv_path"]
         if not csv_path.is_file():
             _LOGGER.debug("Skipping data for %s", split)
@@ -301,7 +302,7 @@ def load_dataset(
 
                 if is_phonemes:
                     # TODO: Map phonemes with phonemes2ids
-                    raise NotImplementedError()
+                    raise NotImplementedError(csv_path)
                     # phoneme_ids = [phoneme_to_id[p] for p in phonemes if p in phoneme_to_id]
                     # phoneme_ids = intersperse(phoneme_ids, 0)
                 else:
@@ -353,7 +354,7 @@ def load_dataset(
         if not audio_path.is_file():
             drop_utt_ids.add(utt_id)
             _LOGGER.warning(
-                "Dropped %s because audio file is missing: %s", utt_id, audio_path,
+                "Dropped %s because audio file is missing: %s", utt_id, audio_path
             )
             continue
 
@@ -399,6 +400,6 @@ def load_dataset(
         utt_speaker_ids=utt_speaker_ids,
         split_ids={
             split: set(data_paths[split]["utt_ids"]) - drop_utt_ids
-            for split in ["train", "val", "test"]
+            for split in splits
         },
     )
