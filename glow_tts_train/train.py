@@ -264,17 +264,17 @@ def val_step(
     all_loss_g: typing.List[float] = []
 
     model.eval()
-    for batch in val_loader:
-        batch = typing.cast(Batch, batch)
-        x, x_lengths, y, y_lengths, speaker_ids = (
-            to_gpu(batch.phoneme_ids),
-            to_gpu(batch.phoneme_lengths),
-            to_gpu(batch.spectrograms),
-            to_gpu(batch.spectrogram_lengths),
-            to_gpu(batch.speaker_ids) if batch.speaker_ids is not None else None,
-        )
+    with torch.no_grad():
+        for batch in val_loader:
+            batch = typing.cast(Batch, batch)
+            x, x_lengths, y, y_lengths, speaker_ids = (
+                to_gpu(batch.phoneme_ids),
+                to_gpu(batch.phoneme_lengths),
+                to_gpu(batch.spectrograms),
+                to_gpu(batch.spectrogram_lengths),
+                to_gpu(batch.speaker_ids) if batch.speaker_ids is not None else None,
+            )
 
-        with autocast(enabled=fp16_run):
             (
                 (z, z_m, z_logs, logdet, z_mask),
                 (_x_m, _x_logs, _x_mask),
@@ -287,7 +287,7 @@ def val_step(
 
             loss_g = l_mle + l_length
 
-        all_loss_g.append(loss_g.item())
+            all_loss_g.append(loss_g.item())
 
     if all_loss_g:
         avg_loss_g = sum(all_loss_g) / len(all_loss_g)
