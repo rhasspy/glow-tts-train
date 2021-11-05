@@ -79,13 +79,19 @@ def main():
     def infer_forward(text, text_lengths, scales):
         noise_scale = scales[0]
         length_scale = scales[1]
-        (mel, mel_lengths, *_), _, _ = old_forward(
+        (
+            mel,
+            mel_lengths,
+            *_,
+        ) = old_forward(  # pylint: disable=unexpected-keyword-arg, no-value-for-parameter
             text,
             text_lengths,
             gen=True,
             noise_scale=noise_scale,
             length_scale=length_scale,
-        )
+        )[
+            0
+        ]
 
         return (mel, mel_lengths)
 
@@ -95,7 +101,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
 
     # Write config
-    with open(args.output / "config.json", "w") as config_file:
+    with open(args.output / "config.json", "w", encoding="utf-8") as config_file:
         config.save(config_file)
 
     # Create dummy input

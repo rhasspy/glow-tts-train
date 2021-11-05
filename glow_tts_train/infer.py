@@ -151,7 +151,6 @@ def main():
             _LOGGER.debug("%s (id=%s)", phoneme_ids, utt_id)
 
             # Convert to tensors
-            # TODO: Allow batches
             text = torch.autograd.Variable(torch.LongTensor(phoneme_ids).unsqueeze(0))
             text_lengths = torch.LongTensor([text.shape[1]])
 

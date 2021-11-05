@@ -91,7 +91,7 @@ class WN(torch.nn.Module):
         gin_channels=0,
         p_dropout=0,
     ):
-        super(WN, self).__init__()
+        super().__init__()
         assert kernel_size % 2 == 1
         assert hidden_channels % 2 == 0
         self.in_channels = in_channels

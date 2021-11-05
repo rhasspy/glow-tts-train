@@ -399,7 +399,6 @@ def load_dataset(
         utt_phoneme_ids=utt_phoneme_ids,
         utt_speaker_ids=utt_speaker_ids,
         split_ids={
-            split: set(data_paths[split]["utt_ids"]) - drop_utt_ids
-            for split in splits
+            split: set(data_paths[split]["utt_ids"]) - drop_utt_ids for split in splits
         },
     )

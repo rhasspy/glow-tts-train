@@ -7,6 +7,8 @@ import torch
 import torch.optim
 from torch.optim.optimizer import Optimizer
 
+LR_SCHEDULER = torch.optim.lr_scheduler._LRScheduler  # pylint: disable=W0212
+
 
 class Adam:
     def __init__(
@@ -193,7 +195,7 @@ class RAdam(Optimizer):
         return loss
 
 
-class NoamLR(torch.optim.lr_scheduler._LRScheduler):
+class NoamLR(LR_SCHEDULER):
     def __init__(
         self,
         optimizer,

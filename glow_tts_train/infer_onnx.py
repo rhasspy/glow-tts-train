@@ -117,7 +117,6 @@ def main():
             _LOGGER.debug("%s (id=%s)", phoneme_ids, utt_id)
 
             # Convert to tensors
-            # TODO: Allow batches
             text = np.expand_dims(np.array(phoneme_ids, dtype=np.int64), 0)
             text_lengths = np.array([text.shape[1]], dtype=np.int64)
             scales = np.array([args.noise_scale, args.length_scale], dtype=np.float32)

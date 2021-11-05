@@ -25,7 +25,11 @@ disable=
   unused-argument,
   broad-except,
   too-many-nested-blocks,
-  invalid-name
+  invalid-name,
+  missing-module-docstring,
+  missing-class-docstring,
+  missing-function-docstring,
+  no-self-use
 
 [FORMAT]
 expected-line-ending-format=LF

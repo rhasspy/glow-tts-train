@@ -63,7 +63,7 @@ def train(
     best_val_loss = config.best_loss
     global_step = config.global_step
 
-    bad_utterance_counts = Counter()
+    bad_utterance_counts: typing.Counter[str] = Counter()
     bad_utterances_path = model_dir / "bad_utterances.txt"
 
     if bad_utterances_path.is_file():
@@ -83,7 +83,7 @@ def train(
             epoch,
             config.epochs,
             global_step,
-            optimizer._optim.param_groups[0]["lr"],
+            optimizer._optim.param_groups[0]["lr"],  # pylint: disable=protected-access
         )
         epoch_start_time = time.perf_counter()
         global_step = train_step(
@@ -217,7 +217,7 @@ def train_step(
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
 
-            scaler.step(optimizer._optim)
+            scaler.step(optimizer._optim)  # pylint: disable=protected-access
             scaler.update()
         else:
             # Float32
@@ -231,7 +231,7 @@ def train_step(
             loss_g.item(),
             batch_idx + 1,
             steps_per_epoch,
-            optimizer._optim.param_groups[0]["lr"],
+            optimizer._optim.param_groups[0]["lr"],  # pylint: disable=protected-access
         )
         global_step += 1
 
