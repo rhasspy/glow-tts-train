@@ -9,6 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+import gruut_ipa
 import librosa
 import torch
 from torch.utils.data import Dataset
@@ -144,7 +145,8 @@ class PhonemeIdsAndMelsDataset(Dataset):
 
         return UtteranceTensors(
             id=utterance.id,
-            phoneme_ids=torch.LongTensor(utterance.phoneme_ids),
+            # phoneme_ids=torch.LongTensor(utterance.phoneme_ids),
+            phoneme_ids=torch.FloatTensor(utterance.phoneme_ids),
             spectrogram=spectrogram,
             speaker_id=speaker_id,
         )
@@ -179,7 +181,8 @@ class UtteranceCollate:
                 multispeaker = True
 
         # Create padded tensors
-        phonemes_padded = torch.LongTensor(num_utterances, max_phonemes_length)
+        # phonemes_padded = torch.LongTensor(num_utterances, max_phonemes_length)
+        phonemes_padded = torch.FloatTensor(num_utterances, max_phonemes_length * 27)
         spec_padded = torch.FloatTensor(num_utterances, num_mels, max_spec_length)
 
         phonemes_padded.zero_()
@@ -302,9 +305,23 @@ def load_dataset(
 
                 if is_phonemes:
                     # TODO: Map phonemes with phonemes2ids
-                    raise NotImplementedError(csv_path)
-                    # phoneme_ids = [phoneme_to_id[p] for p in phonemes if p in phoneme_to_id]
-                    # phoneme_ids = intersperse(phoneme_ids, 0)
+                    phoneme_ids = []
+                    for phoneme_str in re.split(r"([ #])", phonemes_or_ids):
+                        if not phoneme_str.strip():
+                            continue
+
+                        phoneme = gruut_ipa.Phoneme(phoneme_str)
+                        if phoneme.dipthong:
+                            symbol_strs = [
+                                phoneme.dipthong.vowel1.ipa,
+                                phoneme.dipthong.vowel2.ipa,
+                            ]
+                        else:
+                            symbol_strs = [phoneme_str]
+
+                        for symbol_str in symbol_strs:
+                            symbol = gruut_ipa.string_to_symbol(symbol_str)
+                            phoneme_ids.extend(gruut_ipa.to_vector(symbol))
                 else:
                     phoneme_ids = [int(p_id) for p_id in phonemes_or_ids.split()]
                     phoneme_ids = [

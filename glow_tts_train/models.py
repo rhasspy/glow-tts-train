@@ -87,8 +87,9 @@ class TextEncoder(nn.Module):
         self.prenet = prenet
         self.gin_channels = gin_channels
 
-        self.emb = nn.Embedding(n_vocab, hidden_channels)
-        nn.init.normal_(self.emb.weight, 0.0, hidden_channels ** -0.5)
+        # self.emb = nn.Embedding(n_vocab, hidden_channels)
+        # nn.init.normal_(self.emb.weight, 0.0, hidden_channels ** -0.5)
+        self.fc = nn.Linear(27, hidden_channels)
 
         if prenet:
             self.pre = ConvReluNorm(
@@ -118,7 +119,9 @@ class TextEncoder(nn.Module):
         )
 
     def forward(self, x, x_lengths, g=None):
-        x = self.emb(x) * math.sqrt(self.hidden_channels)  # [b, t, h]
+        # x = self.emb(x) * math.sqrt(self.hidden_channels)  # [b, t, h]
+        x = x.view((x.size(0), -1, 27))
+        x = self.fc(x)  # [b, t, h]
         x = torch.transpose(x, 1, -1)  # [b, h, t]
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).type_as(x)
 
