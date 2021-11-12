@@ -80,6 +80,9 @@ def main():
         help="Directory to store cached spectrograms (default: <output>/cache",
     )
     parser.add_argument(
+        "--local_rank", type=int, default=0, help="Rank for multi-GPU training"
+    )
+    parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to the console"
     )
     args = parser.parse_args()
@@ -95,7 +98,7 @@ def main():
 
     assert torch.cuda.is_available(), "GPU is required for training"
 
-    local_rank = os.environ.get("LOCAL_RANK")
+    local_rank = os.environ.get("LOCAL_RANK", args.local_rank)
     if local_rank is not None:
         local_rank = int(local_rank)
 

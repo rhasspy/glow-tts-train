@@ -291,6 +291,13 @@ def load_dataset(
         is_phonemes = data_paths[split]["is_phonemes"]
         utt_ids = data_paths[split]["utt_ids"]
 
+        writer = None
+        if is_phonemes:
+            writer = csv.writer(
+                open(metadata_dir / f"{split}_ids.csv", "w", encoding="utf-8"),
+                delimiter="|",
+            )
+
         with open(csv_path, "r", encoding="utf-8") as csv_file:
             reader = csv.reader(csv_file, delimiter="|")
             for row_idx, row in enumerate(reader):
@@ -322,8 +329,13 @@ def load_dataset(
                         for symbol_str in symbol_strs:
                             symbol = gruut_ipa.string_to_symbol(symbol_str)
                             phoneme_ids.extend(gruut_ipa.to_vector(symbol))
+
+                    if writer is not None:
+                        writer.writerow(
+                            (*row, " ".join(str(v) for v in phoneme_ids))
+                        )
                 else:
-                    phoneme_ids = [int(p_id) for p_id in phonemes_or_ids.split()]
+                    phoneme_ids = [float(p_id) for p_id in phonemes_or_ids.split()]
                     phoneme_ids = [
                         p_id for p_id in phoneme_ids if p_id in id_to_phoneme
                     ]
