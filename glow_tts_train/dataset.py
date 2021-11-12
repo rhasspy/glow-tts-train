@@ -7,14 +7,16 @@ import tempfile
 import typing
 from collections import defaultdict
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
-import gruut_ipa
 import librosa
 import torch
 from torch.utils.data import Dataset
 
-from glow_tts_train.config import TrainingConfig
+import gruut_ipa
+import phonemes2ids
+from glow_tts_train.config import TrainingConfig, Phonemizer
 
 _LOGGER = logging.getLogger("glow_tts_train.dataset")
 
@@ -145,8 +147,8 @@ class PhonemeIdsAndMelsDataset(Dataset):
 
         return UtteranceTensors(
             id=utterance.id,
-            # phoneme_ids=torch.LongTensor(utterance.phoneme_ids),
-            phoneme_ids=torch.FloatTensor(utterance.phoneme_ids),
+            phoneme_ids=torch.LongTensor(utterance.phoneme_ids),
+            # phoneme_ids=torch.FloatTensor(utterance.phoneme_ids),
             spectrogram=spectrogram,
             speaker_id=speaker_id,
         )
@@ -181,8 +183,8 @@ class UtteranceCollate:
                 multispeaker = True
 
         # Create padded tensors
-        # phonemes_padded = torch.LongTensor(num_utterances, max_phonemes_length)
-        phonemes_padded = torch.FloatTensor(num_utterances, max_phonemes_length * 27)
+        phonemes_padded = torch.LongTensor(num_utterances, max_phonemes_length)
+        # phonemes_padded = torch.FloatTensor(num_utterances, max_phonemes_length)
         spec_padded = torch.FloatTensor(num_utterances, num_mels, max_spec_length)
 
         phonemes_padded.zero_()
@@ -226,6 +228,150 @@ class UtteranceCollate:
 # -----------------------------------------------------------------------------
 
 
+def make_dataset_phonemes(
+    config: TrainingConfig,
+    text_csv_path: typing.Union[str, Path],
+    phonemes_csv_path: typing.Union[str, Path],
+):
+    assert config.text_language, "text_language is required in config"
+    assert config.phonemizer, "phonemizer is required in config"
+
+    if config.phonemizer == Phonemizer.SYMBOLS:
+
+        def text_to_phonemes(text):
+            for word_str in text.split(config.phonemes.word_separator):
+                yield list(gruut_ipa.IPA.graphemes(word_str))
+
+    else:
+        raise ValueError(f"Unknown phonemizer: {config.phonemizer}")
+
+    phonemes_csv_path = Path(phonemes_csv_path)
+    phonemes_csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(text_csv_path, "r", encoding="utf-8") as text_file, open(
+        phonemes_csv_path, "w", encoding="utf-8"
+    ) as phonemes_file:
+        reader = csv.reader(text_file, delimiter="|")
+        writer = csv.writer(phonemes_file, delimiter="|")
+
+        for row in reader:
+            text = row[-1]
+            word_phonemes = text_to_phonemes(text)
+            phonemes_str = config.phonemes.word_separator.join(
+                config.phonemes.phoneme_separator.join(p for p in wp)
+                for wp in word_phonemes
+            )
+            writer.writerow((*row, phonemes_str))
+
+
+def learn_dataset_ids(
+    config: TrainingConfig,
+    phonemes_csv_paths: typing.Iterable[typing.Union[str, Path]],
+    phoneme_map_path: typing.Union[str, Path],
+):
+    phoneme_map_path = Path(phoneme_map_path)
+    phoneme_map_path.parent.mkdir(parents=True, exist_ok=True)
+
+    all_phonemes = set()
+    for phonemes_csv_path in phonemes_csv_paths:
+        with open(phonemes_csv_path, "r", encoding="utf-8") as phonemes_file:
+            reader = csv.reader(phonemes_file, delimiter="|")
+            for row in reader:
+                phonemes_str = row[-1]
+                word_phonemes = [
+                    word_str.split(config.phonemes.phoneme_separator)
+                    for word_str in phonemes_str.split(config.phonemes.word_separator)
+                ]
+
+                phonemes2ids.learn_phoneme_ids(
+                    word_phonemes=word_phonemes,
+                    all_phonemes=all_phonemes,
+                    simple_punctuation=config.phonemes.simple_punctuation,
+                    punctuation_map=config.phonemes.punctuation_map,
+                    separate=config.phonemes.separate,
+                    separate_graphemes=config.phonemes.separate_graphemes,
+                    separate_tones=config.phonemes.separate_tones,
+                    phoneme_map=config.phonemes.phoneme_map,
+                )
+
+    phoneme_to_id = {}
+
+    if config.phonemes.pad and (config.phonemes.pad not in phoneme_to_id):
+        # Add pad symbol
+        phoneme_to_id[config.phonemes.pad] = len(phoneme_to_id)
+
+    if config.phonemes.bos and (config.phonemes.bos not in phoneme_to_id):
+        # Add BOS symbol
+        phoneme_to_id[config.phonemes.bos] = len(phoneme_to_id)
+
+    if config.phonemes.eos and (config.phonemes.eos not in phoneme_to_id):
+        # Add EOS symbol
+        phoneme_to_id[config.phonemes.eos] = len(phoneme_to_id)
+
+    if config.phonemes.blank and (config.phonemes.blank not in phoneme_to_id):
+        # Add blank symbol
+        phoneme_to_id[config.phonemes.blank] = len(phoneme_to_id)
+
+    if config.phonemes.blank_word and (config.phonemes.blank_word not in phoneme_to_id):
+        # Add blank symbol
+        phoneme_to_id[config.phonemes.blank_word] = len(phoneme_to_id)
+
+    for phoneme in sorted(all_phonemes):
+        if phoneme not in phoneme_to_id:
+            phoneme_to_id[phoneme] = len(phoneme_to_id)
+
+    # Write id<space>phoneme
+    with open(phoneme_map_path, "w", encoding="utf-8") as map_file:
+        for phoneme, phoneme_id in phoneme_to_id.items():
+            print(phoneme_id, phoneme, file=map_file)
+
+
+def make_dataset_ids(
+    config: TrainingConfig,
+    phonemes_csv_path: typing.Union[str, Path],
+    ids_csv_path: typing.Union[str, Path],
+):
+    assert config.phonemes.phoneme_to_id, "Phoneme/id map is required"
+
+    with open(phonemes_csv_path, "r", encoding="utf-8") as phonemes_file, open(
+        ids_csv_path, "w", encoding="utf-8"
+    ) as ids_file:
+        reader = csv.reader(phonemes_file, delimiter="|")
+        writer = csv.writer(ids_file, delimiter="|")
+
+        for row in reader:
+            phonemes_str = row[-1]
+            word_phonemes = [
+                word_str.split(config.phonemes.phoneme_separator)
+                for word_str in phonemes_str.split(config.phonemes.word_separator)
+            ]
+
+            phoneme_ids = phonemes2ids.phonemes2ids(
+                word_phonemes=word_phonemes,
+                phoneme_to_id=config.phonemes.phoneme_to_id,
+                pad=config.phonemes.pad,
+                bos=config.phonemes.bos,
+                eos=config.phonemes.eos,
+                blank=config.phonemes.blank,
+                blank_word=config.phonemes.blank_word,
+                blank_between=config.phonemes.blank_between,
+                blank_at_start=config.phonemes.blank_at_start,
+                blank_at_end=config.phonemes.blank_at_end,
+                tone_before=config.phonemes.tone_before,
+                simple_punctuation=config.phonemes.simple_punctuation,
+                punctuation_map=config.phonemes.punctuation_map,
+                separate=config.phonemes.separate,
+                separate_graphemes=config.phonemes.separate_graphemes,
+                separate_tones=config.phonemes.separate_tones,
+                phoneme_map=config.phonemes.phoneme_map,
+                auto_bos_eos=config.phonemes.auto_bos_eos,
+            )
+
+            ids_str = " ".join(str(p_id) for p_id in phoneme_ids)
+
+            writer.writerow((*row, ids_str))
+
+
 def load_dataset(
     config: TrainingConfig,
     dataset_name: str,
@@ -240,43 +386,11 @@ def load_dataset(
     # Determine data paths
     data_paths = defaultdict(dict)
     for split in splits:
-        is_phonemes = False
         csv_path = metadata_dir / f"{split}_ids.csv"
-        if not csv_path.is_file():
-            csv_path = metadata_dir / f"{split}_phonemes.csv"
-            is_phonemes = True
+        assert csv_path.is_file(), f"Missing {csv_path}"
 
-        data_paths[split]["is_phonemes"] = is_phonemes
         data_paths[split]["csv_path"] = csv_path
         data_paths[split]["utt_ids"] = []
-
-    # train/val sets are required
-    for split in splits:
-        assert data_paths[split][
-            "csv_path"
-        ].is_file(), (
-            f"Missing {split}_ids.csv or {split}_phonemes.csv in {metadata_dir}"
-        )
-
-    # Load phonemes
-    phoneme_to_id = {}
-    phonemes_path = metadata_dir / "phonemes.txt"
-
-    _LOGGER.debug("Loading phonemes from %s", phonemes_path)
-    with open(phonemes_path, "r", encoding="utf-8") as phonemes_file:
-        for line in phonemes_file:
-            line = line.strip("\r\n")
-            if (not line) or line.startswith("#"):
-                continue
-
-            phoneme_id, phoneme = re.split(r"[ \t]", line, maxsplit=1)
-
-            # Avoid overwriting duplicates
-            if phoneme not in phoneme_to_id:
-                phoneme_id = int(phoneme_id)
-                phoneme_to_id[phoneme] = phoneme_id
-
-    id_to_phoneme = {i: p for p, i in phoneme_to_id.items()}
 
     # Load utterances
     utt_phoneme_ids = {}
@@ -288,15 +402,7 @@ def load_dataset(
             _LOGGER.debug("Skipping data for %s", split)
             continue
 
-        is_phonemes = data_paths[split]["is_phonemes"]
         utt_ids = data_paths[split]["utt_ids"]
-
-        writer = None
-        if is_phonemes:
-            writer = csv.writer(
-                open(metadata_dir / f"{split}_ids.csv", "w", encoding="utf-8"),
-                delimiter="|",
-            )
 
         with open(csv_path, "r", encoding="utf-8") as csv_file:
             reader = csv.reader(csv_file, delimiter="|")
@@ -310,35 +416,10 @@ def load_dataset(
                     else:
                         utt_speaker_ids[utt_id] = dataset_name
 
-                if is_phonemes:
-                    # TODO: Map phonemes with phonemes2ids
-                    phoneme_ids = []
-                    for phoneme_str in re.split(r"([ #])", phonemes_or_ids):
-                        if not phoneme_str.strip():
-                            continue
-
-                        phoneme = gruut_ipa.Phoneme(phoneme_str)
-                        if phoneme.dipthong:
-                            symbol_strs = [
-                                phoneme.dipthong.vowel1.ipa,
-                                phoneme.dipthong.vowel2.ipa,
-                            ]
-                        else:
-                            symbol_strs = [phoneme_str]
-
-                        for symbol_str in symbol_strs:
-                            symbol = gruut_ipa.string_to_symbol(symbol_str)
-                            phoneme_ids.extend(gruut_ipa.to_vector(symbol))
-
-                    if writer is not None:
-                        writer.writerow(
-                            (*row, " ".join(str(v) for v in phoneme_ids))
-                        )
-                else:
-                    phoneme_ids = [float(p_id) for p_id in phonemes_or_ids.split()]
-                    phoneme_ids = [
-                        p_id for p_id in phoneme_ids if p_id in id_to_phoneme
-                    ]
+                phoneme_ids = [int(p_id) for p_id in phonemes_or_ids.split()]
+                phoneme_ids = [
+                    p_id for p_id in phoneme_ids if 0 <= p_id < config.model.num_symbols
+                ]
 
                 if phoneme_ids:
                     utt_phoneme_ids[utt_id] = phoneme_ids

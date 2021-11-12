@@ -6,6 +6,7 @@ import random
 import typing
 from pathlib import Path
 
+import phonemes2ids
 import torch
 import torch.multiprocessing
 from torch.nn.parallel import DistributedDataParallel
@@ -18,6 +19,9 @@ from glow_tts_train.dataset import (
     PhonemeIdsAndMelsDataset,
     UtteranceCollate,
     load_dataset,
+    make_dataset_phonemes,
+    learn_dataset_ids,
+    make_dataset_ids,
 )
 from glow_tts_train.ddi import initialize_model
 from glow_tts_train.models import ModelType
@@ -79,9 +83,7 @@ def main():
         "--cache",
         help="Directory to store cached spectrograms (default: <output>/cache",
     )
-    parser.add_argument(
-        "--local_rank", type=int, default=0, help="Rank for multi-GPU training"
-    )
+    parser.add_argument("--local_rank", type=int, help="Rank for multi-GPU training")
     parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to the console"
     )
@@ -174,10 +176,72 @@ def main():
             len(args.dataset),
         )
 
+    # text -> phonemes
+    phonemes_csv_paths = []
+    for dataset_name, metadata_dir, audio_dir in args.dataset:
+        metadata_dir = Path(metadata_dir)
+
+        text_csv_path = metadata_dir / "all_text.csv"
+        phonemes_csv_path = metadata_dir / "all_phonemes.csv"
+
+        if not phonemes_csv_path.is_file():
+            make_dataset_phonemes(config, text_csv_path, phonemes_csv_path)
+
+        phonemes_csv_paths.append(phonemes_csv_path)
+
+    # id <-> phoneme map
+    if not config.phonemes.phoneme_to_id:
+        phoneme_map_path = args.output / "phonemes.txt"
+        if not phoneme_map_path.is_file():
+            learn_dataset_ids(config, phonemes_csv_paths, phoneme_map_path)
+
+        with open(phoneme_map_path, "r", encoding="utf-8") as map_file:
+            config.phonemes.phoneme_to_id = phonemes2ids.load_phoneme_ids(map_file)
+
+    if config.model.num_symbols < 1:
+        # Automatically set
+        config.model.num_symbols = len(config.phonemes.phoneme_to_id)
+
+    # phonemes -> ids
     datasets = []
     for dataset_name, metadata_dir, audio_dir in args.dataset:
         metadata_dir = Path(metadata_dir)
         audio_dir = Path(audio_dir)
+
+        train_csv_path = metadata_dir / "train_ids.csv"
+        val_csv_path = metadata_dir / "val_ids.csv"
+
+        if (not train_csv_path.is_file()) or (not val_csv_path.is_file()):
+            phonemes_csv_path = metadata_dir / "all_phonemes.csv"
+            ids_csv_path = metadata_dir / "all_ids.csv"
+
+            if not ids_csv_path.is_file():
+                make_dataset_ids(config, phonemes_csv_path, ids_csv_path)
+
+            num_utterances = 0
+            with open(ids_csv_path, "r", encoding="utf-8") as ids_file:
+                for line in ids_file:
+                    if line.strip():
+                        num_utterances += 1
+
+            num_val = num_utterances // 10
+            num_train = num_utterances - num_val
+
+            with open(ids_csv_path, "r", encoding="utf-8") as ids_file, open(
+                train_csv_path, "w", encoding="utf-8"
+            ) as train_file, open(val_csv_path, "w", encoding="utf-8") as val_file:
+                line_idx = 0
+                for line in ids_file:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    if line_idx < num_train:
+                        print(line, file=train_file)
+                    else:
+                        print(line, file=val_file)
+
+                    line_idx += 1
 
         datasets.append(
             load_dataset(

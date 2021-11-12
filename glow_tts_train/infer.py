@@ -151,11 +151,11 @@ def main():
                     utt_id, line = row[0], row[-1]
 
             # Phoneme ids as p1 p2 p3...
-            phoneme_ids = [float(p) for p in line.split()]
+            phoneme_ids = [int(p) for p in line.split()]
             _LOGGER.debug("%s (id=%s)", phoneme_ids, utt_id)
 
             # Convert to tensors
-            text = torch.autograd.Variable(torch.FloatTensor(phoneme_ids).unsqueeze(0))
+            text = torch.autograd.Variable(torch.LongTensor(phoneme_ids).unsqueeze(0))
             text_lengths = torch.LongTensor([text.shape[1]])
 
             if args.cuda:

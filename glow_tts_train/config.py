@@ -3,11 +3,13 @@ import collections
 import json
 import typing
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 import librosa
 import numpy as np
 from dataclasses_json import DataClassJsonMixin
+from phonemes2ids import BlankBetween, STRESS
 
 
 @dataclass
@@ -236,26 +238,72 @@ class ModelConfig(DataClassJsonMixin):
 
 
 @dataclass
+class PhonemesConfig(DataClassJsonMixin):
+    phoneme_separator: str = " "
+    """Separator between individual phonemes in CSV input"""
+
+    word_separator: str = "#"
+    """Separator between word phonemes in CSV input (must not match phoneme_separator)"""
+
+    phoneme_to_id: typing.Optional[typing.Mapping[str, int]] = None
+    pad: typing.Optional[str] = "_"
+    bos: typing.Optional[str] = None
+    eos: typing.Optional[str] = None
+    blank: typing.Optional[str] = "#"
+    blank_word: typing.Optional[str] = None
+    blank_between: typing.Union[str, BlankBetween] = BlankBetween.WORDS
+    blank_at_start: bool = True
+    blank_at_end: bool = True
+    simple_punctuation: bool = True
+    punctuation_map: typing.Optional[typing.Mapping[str, str]] = None
+    separate: typing.Optional[typing.Collection[str]] = None
+    separate_graphemes: bool = False
+    separate_tones: bool = False
+    tone_before: bool = False
+    phoneme_map: typing.Optional[typing.Mapping[str, str]] = None
+    auto_bos_eos: bool = False
+
+    def split_word_phonemes(self, phonemes_str: str) -> typing.List[typing.List[str]]:
+        """Split phonemes string into a list of lists (outer is words, inner is individual phonemes in each word)"""
+        return [
+            word_phonemes_str.split(self.phoneme_separator)
+            for word_phonemes_str in phonemes_str.split(self.word_separator)
+        ]
+
+
+class Phonemizer(str, Enum):
+    SYMBOLS = "symbols"
+    GRUUT = "gruut"
+    ESPEAK = "espeak"
+
+
+@dataclass
 class TrainingConfig(DataClassJsonMixin):
     seed: int = 1234
     epochs: int = 10000
-    learning_rate: float = 1e0
+    learning_rate: float = 2e-4
     betas: typing.Tuple[float, float] = field(default=(0.8, 0.99))
-    weight_decay: float = 0.0
-    degenerated_to_sgd: bool = True
     eps: float = 1e-9
     grad_clip: float = 5.0
-    warmup_steps: float = 4000
-    scheduler: str = ""
+    lr_decay: float = 0.999875
+
     batch_size: int = 32
     fp16_run: bool = False
     last_epoch: int = 1
     global_step: int = 1
     best_loss: typing.Optional[float] = None
+
     min_seq_length: typing.Optional[int] = None
     max_seq_length: typing.Optional[int] = None
+
+    speaker_id_map: typing.Optional[typing.Dict[str, int]] = None
+
     audio: AudioConfig = field(default_factory=AudioConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
+    phonemes: PhonemesConfig = field(default_factory=PhonemesConfig)
+    text_language: typing.Optional[str] = None
+    phonemizer: typing.Optional[Phonemizer] = None
+
     version: int = 1
     git_commit: str = ""
 

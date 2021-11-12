@@ -226,5 +226,5 @@ class NoamLR(LR_SCHEDULER):
         ]
 
 
-OptimizerType = Adam
-SchedulerType = NoamLR
+OptimizerType = torch.optim.AdamW
+SchedulerType = torch.optim.lr_scheduler.ExponentialLR
