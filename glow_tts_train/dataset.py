@@ -148,7 +148,6 @@ class PhonemeIdsAndMelsDataset(Dataset):
         return UtteranceTensors(
             id=utterance.id,
             phoneme_ids=torch.LongTensor(utterance.phoneme_ids),
-            # phoneme_ids=torch.FloatTensor(utterance.phoneme_ids),
             spectrogram=spectrogram,
             speaker_id=speaker_id,
         )
