@@ -38,16 +38,7 @@ def main():
         "--output", required=True, help="Directory to store model artifacts"
     )
     parser.add_argument(
-        "--dataset",
-        required=True,
-        nargs=3,
-        action="append",
-        default=[],
-        metavar=("dataset_name", "metadata_dir", "audio_dir"),
-        help="Speaker id, phonemes CSV, and directory with audio files",
-    )
-    parser.add_argument(
-        "--config", action="append", help="Path to JSON configuration file(s)"
+        "--config", required=True, help="Path to JSON configuration file"
     )
     parser.add_argument(
         "--batch-size", type=int, help="Batch size (default: use config)"

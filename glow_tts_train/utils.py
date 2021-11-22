@@ -38,17 +38,6 @@ def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
     return acts
 
 
-def convert_pad_shape(pad_shape):
-    last = pad_shape[::-1]
-    pad_shape = [item for sublist in last for item in sublist]
-    return pad_shape
-
-
-def shift_1d(x):
-    x = F.pad(x, convert_pad_shape([[0, 0], [0, 0], [1, 0]]))[:, :, :-1]
-    return x
-
-
 def sequence_mask(length, max_length=None):
     if max_length is None:
         max_length = length.max()
@@ -110,7 +99,8 @@ def generate_path(duration, mask):
     cum_duration_flat = cum_duration.view(b * t_x)
     path = sequence_mask(cum_duration_flat, t_y).to(mask.dtype)
     path = path.view(b, t_x, t_y)
-    path = path - F.pad(path, convert_pad_shape([[0, 0], [1, 0], [0, 0]]))[:, :-1]
+    # path = path - F.pad(path, convert_pad_shape([[0, 0], [1, 0], [0, 0]]))[:, :-1]
+    path = path - F.pad(path, (0, 0, 1, 0, 0, 0))[:, :-1]
     path = path * mask
     return path
 

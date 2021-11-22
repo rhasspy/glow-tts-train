@@ -5,12 +5,12 @@ from pathlib import Path
 
 import torch
 
-from .checkpoint import load_checkpoint
-from .config import TrainingConfig
+from glow_tts_train.checkpoint import load_checkpoint
+from glow_tts_train.config import TrainingConfig
 
 _LOGGER = logging.getLogger("glow_tts_train.export_onnx")
 
-OPSET_VERSION = 11
+OPSET_VERSION = 13
 
 # -----------------------------------------------------------------------------
 
@@ -119,8 +119,6 @@ def main():
         dummy_input,
         str(args.output / "generator.onnx"),
         opset_version=OPSET_VERSION,
-        do_constant_folding=False,
-        enable_onnx_checker=True,
         input_names=["input", "input_lengths", "scales"],
         output_names=["output"],
         dynamic_axes={

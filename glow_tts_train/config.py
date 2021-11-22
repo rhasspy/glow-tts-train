@@ -9,7 +9,8 @@ from pathlib import Path
 import librosa
 import numpy as np
 from dataclasses_json import DataClassJsonMixin
-from phonemes2ids import BlankBetween, STRESS
+from gruut_ipa import IPA
+from phonemes2ids import BlankBetween
 
 
 @dataclass
@@ -256,12 +257,14 @@ class PhonemesConfig(DataClassJsonMixin):
     blank_at_end: bool = True
     simple_punctuation: bool = True
     punctuation_map: typing.Optional[typing.Mapping[str, str]] = None
-    separate: typing.Optional[typing.Collection[str]] = None
+    separate: typing.Optional[typing.List[str]] = None
     separate_graphemes: bool = False
     separate_tones: bool = False
     tone_before: bool = False
     phoneme_map: typing.Optional[typing.Mapping[str, str]] = None
     auto_bos_eos: bool = False
+    minor_break: typing.Optional[str] = IPA.BREAK_MINOR.value
+    major_break: typing.Optional[str] = IPA.BREAK_MAJOR.value
 
     def split_word_phonemes(self, phonemes_str: str) -> typing.List[typing.List[str]]:
         """Split phonemes string into a list of lists (outer is words, inner is individual phonemes in each word)"""
@@ -270,11 +273,46 @@ class PhonemesConfig(DataClassJsonMixin):
             for word_phonemes_str in phonemes_str.split(self.word_separator)
         ]
 
+    def join_word_phonemes(self, word_phonemes: typing.List[typing.List[str]]) -> str:
+        """Split phonemes string into a list of lists (outer is words, inner is individual phonemes in each word)"""
+        return self.word_separator.join(
+            self.phoneme_separator.join(wp) for wp in word_phonemes
+        )
+
 
 class Phonemizer(str, Enum):
     SYMBOLS = "symbols"
     GRUUT = "gruut"
     ESPEAK = "espeak"
+
+
+class Aligner(str, Enum):
+    KALDI_ALIGN = "kaldi_align"
+
+
+class MetadataFormat(str, Enum):
+    TEXT = "text"
+    PHONEMES = "phonemes"
+    PHONEME_IDS = "ids"
+
+
+@dataclass
+class DatasetConfig:
+    name: str
+    metadata_path: typing.Optional[typing.Union[str, Path]] = None
+    train_path: typing.Optional[typing.Union[str, Path]] = None
+    val_path: typing.Optional[typing.Union[str, Path]] = None
+    val_split: float = 0.10
+    val_random: bool = True
+    multispeaker: bool = False
+    text_language: typing.Optional[str] = None
+    audio_dir: typing.Optional[typing.Union[str, Path]] = None
+    cache_dir: typing.Optional[typing.Union[str, Path]] = None
+
+    def __post_init__(self):
+        assert self.metadata_path or (
+            self.train_path and self.val_path
+        ), "Either metadata_path or both train/val paths are required"
 
 
 @dataclass
@@ -302,7 +340,10 @@ class TrainingConfig(DataClassJsonMixin):
     model: ModelConfig = field(default_factory=ModelConfig)
     phonemes: PhonemesConfig = field(default_factory=PhonemesConfig)
     text_language: typing.Optional[str] = None
+    text_aligner: typing.Optional[Aligner] = None
     phonemizer: typing.Optional[Phonemizer] = None
+    datasets: typing.List[DatasetConfig] = field(default_factory=list)
+    dataset_format: MetadataFormat = MetadataFormat.TEXT
 
     version: int = 1
     git_commit: str = ""
