@@ -10,13 +10,13 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+import gruut_ipa
 import librosa
+import phonemes2ids
 import torch
 from torch.utils.data import Dataset
 
-import gruut_ipa
-import phonemes2ids
-from glow_tts_train.config import TrainingConfig, Phonemizer
+from glow_tts_train.config import Phonemizer, TrainingConfig
 
 _LOGGER = logging.getLogger("glow_tts_train.dataset")
 

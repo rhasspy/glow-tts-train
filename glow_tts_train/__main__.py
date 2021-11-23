@@ -18,10 +18,10 @@ from glow_tts_train.config import TrainingConfig
 from glow_tts_train.dataset import (
     PhonemeIdsAndMelsDataset,
     UtteranceCollate,
-    load_dataset,
-    make_dataset_phonemes,
     learn_dataset_ids,
+    load_dataset,
     make_dataset_ids,
+    make_dataset_phonemes,
 )
 from glow_tts_train.ddi import initialize_model
 from glow_tts_train.models import ModelType

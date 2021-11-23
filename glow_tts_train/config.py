@@ -290,6 +290,11 @@ class Aligner(str, Enum):
     KALDI_ALIGN = "kaldi_align"
 
 
+class TextCasing(str, Enum):
+    LOWER = "lower"
+    UPPER = "upper"
+
+
 class MetadataFormat(str, Enum):
     TEXT = "text"
     PHONEMES = "phonemes"
@@ -316,6 +321,12 @@ class DatasetConfig:
 
 
 @dataclass
+class AlignerConfig:
+    aligner: typing.Optional[Aligner] = None
+    casing: typing.Optional[TextCasing] = None
+
+
+@dataclass
 class TrainingConfig(DataClassJsonMixin):
     seed: int = 1234
     epochs: int = 10000
@@ -339,8 +350,8 @@ class TrainingConfig(DataClassJsonMixin):
     audio: AudioConfig = field(default_factory=AudioConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     phonemes: PhonemesConfig = field(default_factory=PhonemesConfig)
+    text_aligner: AlignerConfig = field(default_factory=AlignerConfig)
     text_language: typing.Optional[str] = None
-    text_aligner: typing.Optional[Aligner] = None
     phonemizer: typing.Optional[Phonemizer] = None
     datasets: typing.List[DatasetConfig] = field(default_factory=list)
     dataset_format: MetadataFormat = MetadataFormat.TEXT
