@@ -319,6 +319,17 @@ class DatasetConfig:
             self.train_path and self.val_path
         ), "Either metadata_path or both train/val paths are required"
 
+    def get_cache_dir(self, output_dir: typing.Union[str, Path]) -> Path:
+        if self.cache_dir is not None:
+            cache_dir = Path(self.cache_dir)
+        else:
+            cache_dir = Path("cache") / self.name
+
+        if not cache_dir.is_absolute():
+            cache_dir = output_dir / str(cache_dir)
+
+        return cache_dir
+
 
 @dataclass
 class AlignerConfig:
@@ -330,6 +341,7 @@ class AlignerConfig:
 class TrainingConfig(DataClassJsonMixin):
     seed: int = 1234
     epochs: int = 10000
+    checkpoint_epochs: int = 100
     learning_rate: float = 2e-4
     betas: typing.Tuple[float, float] = field(default=(0.8, 0.99))
     eps: float = 1e-9

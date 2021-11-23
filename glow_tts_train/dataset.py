@@ -1,22 +1,16 @@
 """Classes and methods for loading phonemes and mel spectrograms"""
 import csv
 import logging
-import re
-import shutil
 import tempfile
 import typing
 from collections import defaultdict
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 
-import gruut_ipa
-import librosa
-import phonemes2ids
 import torch
 from torch.utils.data import Dataset
 
-from glow_tts_train.config import Phonemizer, TrainingConfig
+from glow_tts_train.config import MetadataFormat, TrainingConfig
 
 _LOGGER = logging.getLogger("glow_tts_train.dataset")
 
@@ -27,8 +21,7 @@ _LOGGER = logging.getLogger("glow_tts_train.dataset")
 class Utterance:
     id: str
     phoneme_ids: typing.Sequence[int]
-    audio_path: Path
-    cache_path: typing.Optional[Path]
+    spec_path: Path
     speaker_id: typing.Optional[int] = None
 
 
@@ -58,7 +51,7 @@ UTTERANCE_IDS = typing.Collection[str]
 @dataclass
 class DatasetInfo:
     name: str
-    audio_dir: Path
+    cache_dir: Path
     utt_phoneme_ids: UTTERANCE_PHONEME_IDS
     utt_speaker_ids: UTTERANCE_SPEAKER_IDS
     split_ids: typing.Mapping[str, UTTERANCE_IDS]
@@ -73,7 +66,6 @@ class PhonemeIdsAndMelsDataset(Dataset):
         config: TrainingConfig,
         datasets: typing.Sequence[DatasetInfo],
         split: str,
-        cache_dir: typing.Optional[typing.Union[str, Path]] = None,
     ):
         super().__init__()
 
@@ -81,65 +73,28 @@ class PhonemeIdsAndMelsDataset(Dataset):
         self.utterances = []
         self.split = split
 
-        self.temp_dir: typing.Optional[tempfile.TemporaryDirectory] = None
-
-        if cache_dir is None:
-            # pylint: disable=consider-using-with
-            self.temp_dir = tempfile.TemporaryDirectory(prefix="glow_tts_train")
-            self.cache_dir = Path(self.temp_dir.name)
-        else:
-            self.cache_dir = Path(cache_dir)
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-
         for dataset in datasets:
             for utt_id in dataset.split_ids.get(split, []):
-                audio_path = dataset.audio_dir / utt_id
-
-                if not audio_path.is_file():
-                    # Try WAV extension
-                    audio_path = dataset.audio_dir / f"{utt_id}.wav"
-
-                if audio_path.is_file():
-                    cache_path = self.cache_dir / dataset.name / f"{utt_id}.spec.pt"
+                spec_path = dataset.cache_dir / f"{utt_id}.spec.pt"
+                if spec_path.is_file():
                     self.utterances.append(
                         Utterance(
                             id=utt_id,
                             phoneme_ids=dataset.utt_phoneme_ids[utt_id],
-                            audio_path=audio_path,
-                            cache_path=cache_path,
+                            spec_path=spec_path,
                             speaker_id=dataset.utt_speaker_ids.get(utt_id),
                         )
                     )
                 else:
-                    _LOGGER.warning("Missing audio file: %s", audio_path)
+                    _LOGGER.warning("Missing spec file: %s", spec_path)
 
     def __getitem__(self, index):
         utterance = self.utterances[index]
 
-        spectrogram_path = utterance.cache_path
+        spectrogram_path = utterance.spec_path
+        spectrogram = torch.load(str(spectrogram_path))
 
-        if (
-            (spectrogram_path is not None)
-            and spectrogram_path.is_file()
-            and (spectrogram_path.stat().st_size > 0)
-        ):
-            spectrogram = torch.load(str(spectrogram_path))
-        else:
-            # Load audio and resample
-            audio, _sample_rate = librosa.load(
-                str(utterance.audio_path), sr=self.config.audio.sample_rate
-            )
-
-            spectrogram = torch.FloatTensor(self.config.audio.wav2mel(audio))
-
-            if spectrogram_path is not None:
-                # Save to cache.
-                spectrogram_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Use temporary file to avoid multiple processes writing at the same time.
-                with tempfile.NamedTemporaryFile(mode="wb") as spec_file:
-                    torch.save(spectrogram, spec_file.name)
-                    shutil.copy(spec_file.name, spectrogram_path)
+        # TODO: scale spec
 
         speaker_id = None
         if utterance.speaker_id is not None:
@@ -227,165 +182,168 @@ class UtteranceCollate:
 # -----------------------------------------------------------------------------
 
 
-def make_dataset_phonemes(
-    config: TrainingConfig,
-    text_csv_path: typing.Union[str, Path],
-    phonemes_csv_path: typing.Union[str, Path],
-):
-    assert config.text_language, "text_language is required in config"
-    assert config.phonemizer, "phonemizer is required in config"
+# def make_dataset_phonemes(
+#     config: TrainingConfig,
+#     text_csv_path: typing.Union[str, Path],
+#     phonemes_csv_path: typing.Union[str, Path],
+# ):
+#     assert config.text_language, "text_language is required in config"
+#     assert config.phonemizer, "phonemizer is required in config"
 
-    if config.phonemizer == Phonemizer.SYMBOLS:
+#     if config.phonemizer == Phonemizer.SYMBOLS:
 
-        def text_to_phonemes(text):
-            for word_str in text.split(config.phonemes.word_separator):
-                yield list(gruut_ipa.IPA.graphemes(word_str))
+#         def text_to_phonemes(text):
+#             for word_str in text.split(config.phonemes.word_separator):
+#                 yield list(gruut_ipa.IPA.graphemes(word_str))
 
-    else:
-        raise ValueError(f"Unknown phonemizer: {config.phonemizer}")
+#     else:
+#         raise ValueError(f"Unknown phonemizer: {config.phonemizer}")
 
-    phonemes_csv_path = Path(phonemes_csv_path)
-    phonemes_csv_path.parent.mkdir(parents=True, exist_ok=True)
+#     phonemes_csv_path = Path(phonemes_csv_path)
+#     phonemes_csv_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(text_csv_path, "r", encoding="utf-8") as text_file, open(
-        phonemes_csv_path, "w", encoding="utf-8"
-    ) as phonemes_file:
-        reader = csv.reader(text_file, delimiter="|")
-        writer = csv.writer(phonemes_file, delimiter="|")
+#     with open(text_csv_path, "r", encoding="utf-8") as text_file, open(
+#         phonemes_csv_path, "w", encoding="utf-8"
+#     ) as phonemes_file:
+#         reader = csv.reader(text_file, delimiter="|")
+#         writer = csv.writer(phonemes_file, delimiter="|")
 
-        for row in reader:
-            text = row[-1]
-            word_phonemes = text_to_phonemes(text)
-            phonemes_str = config.phonemes.word_separator.join(
-                config.phonemes.phoneme_separator.join(p for p in wp)
-                for wp in word_phonemes
-            )
-            writer.writerow((*row, phonemes_str))
-
-
-def learn_dataset_ids(
-    config: TrainingConfig,
-    phonemes_csv_paths: typing.Iterable[typing.Union[str, Path]],
-    phoneme_map_path: typing.Union[str, Path],
-):
-    phoneme_map_path = Path(phoneme_map_path)
-    phoneme_map_path.parent.mkdir(parents=True, exist_ok=True)
-
-    all_phonemes = set()
-    for phonemes_csv_path in phonemes_csv_paths:
-        with open(phonemes_csv_path, "r", encoding="utf-8") as phonemes_file:
-            reader = csv.reader(phonemes_file, delimiter="|")
-            for row in reader:
-                phonemes_str = row[-1]
-                word_phonemes = [
-                    word_str.split(config.phonemes.phoneme_separator)
-                    for word_str in phonemes_str.split(config.phonemes.word_separator)
-                ]
-
-                phonemes2ids.learn_phoneme_ids(
-                    word_phonemes=word_phonemes,
-                    all_phonemes=all_phonemes,
-                    simple_punctuation=config.phonemes.simple_punctuation,
-                    punctuation_map=config.phonemes.punctuation_map,
-                    separate=config.phonemes.separate,
-                    separate_graphemes=config.phonemes.separate_graphemes,
-                    separate_tones=config.phonemes.separate_tones,
-                    phoneme_map=config.phonemes.phoneme_map,
-                )
-
-    phoneme_to_id = {}
-
-    if config.phonemes.pad and (config.phonemes.pad not in phoneme_to_id):
-        # Add pad symbol
-        phoneme_to_id[config.phonemes.pad] = len(phoneme_to_id)
-
-    if config.phonemes.bos and (config.phonemes.bos not in phoneme_to_id):
-        # Add BOS symbol
-        phoneme_to_id[config.phonemes.bos] = len(phoneme_to_id)
-
-    if config.phonemes.eos and (config.phonemes.eos not in phoneme_to_id):
-        # Add EOS symbol
-        phoneme_to_id[config.phonemes.eos] = len(phoneme_to_id)
-
-    if config.phonemes.blank and (config.phonemes.blank not in phoneme_to_id):
-        # Add blank symbol
-        phoneme_to_id[config.phonemes.blank] = len(phoneme_to_id)
-
-    if config.phonemes.blank_word and (config.phonemes.blank_word not in phoneme_to_id):
-        # Add blank symbol
-        phoneme_to_id[config.phonemes.blank_word] = len(phoneme_to_id)
-
-    for phoneme in sorted(all_phonemes):
-        if phoneme not in phoneme_to_id:
-            phoneme_to_id[phoneme] = len(phoneme_to_id)
-
-    # Write id<space>phoneme
-    with open(phoneme_map_path, "w", encoding="utf-8") as map_file:
-        for phoneme, phoneme_id in phoneme_to_id.items():
-            print(phoneme_id, phoneme, file=map_file)
+#         for row in reader:
+#             text = row[-1]
+#             word_phonemes = text_to_phonemes(text)
+#             phonemes_str = config.phonemes.word_separator.join(
+#                 config.phonemes.phoneme_separator.join(p for p in wp)
+#                 for wp in word_phonemes
+#             )
+#             writer.writerow((*row, phonemes_str))
 
 
-def make_dataset_ids(
-    config: TrainingConfig,
-    phonemes_csv_path: typing.Union[str, Path],
-    ids_csv_path: typing.Union[str, Path],
-):
-    assert config.phonemes.phoneme_to_id, "Phoneme/id map is required"
+# def learn_dataset_ids(
+#     config: TrainingConfig,
+#     phonemes_csv_paths: typing.Iterable[typing.Union[str, Path]],
+#     phoneme_map_path: typing.Union[str, Path],
+# ):
+#     phoneme_map_path = Path(phoneme_map_path)
+#     phoneme_map_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(phonemes_csv_path, "r", encoding="utf-8") as phonemes_file, open(
-        ids_csv_path, "w", encoding="utf-8"
-    ) as ids_file:
-        reader = csv.reader(phonemes_file, delimiter="|")
-        writer = csv.writer(ids_file, delimiter="|")
+#     all_phonemes = set()
+#     for phonemes_csv_path in phonemes_csv_paths:
+#         with open(phonemes_csv_path, "r", encoding="utf-8") as phonemes_file:
+#             reader = csv.reader(phonemes_file, delimiter="|")
+#             for row in reader:
+#                 phonemes_str = row[-1]
+#                 word_phonemes = [
+#                     word_str.split(config.phonemes.phoneme_separator)
+#                     for word_str in phonemes_str.split(config.phonemes.word_separator)
+#                 ]
 
-        for row in reader:
-            phonemes_str = row[-1]
-            word_phonemes = [
-                word_str.split(config.phonemes.phoneme_separator)
-                for word_str in phonemes_str.split(config.phonemes.word_separator)
-            ]
+#                 phonemes2ids.learn_phoneme_ids(
+#                     word_phonemes=word_phonemes,
+#                     all_phonemes=all_phonemes,
+#                     simple_punctuation=config.phonemes.simple_punctuation,
+#                     punctuation_map=config.phonemes.punctuation_map,
+#                     separate=config.phonemes.separate,
+#                     separate_graphemes=config.phonemes.separate_graphemes,
+#                     separate_tones=config.phonemes.separate_tones,
+#                     phoneme_map=config.phonemes.phoneme_map,
+#                 )
 
-            phoneme_ids = phonemes2ids.phonemes2ids(
-                word_phonemes=word_phonemes,
-                phoneme_to_id=config.phonemes.phoneme_to_id,
-                pad=config.phonemes.pad,
-                bos=config.phonemes.bos,
-                eos=config.phonemes.eos,
-                blank=config.phonemes.blank,
-                blank_word=config.phonemes.blank_word,
-                blank_between=config.phonemes.blank_between,
-                blank_at_start=config.phonemes.blank_at_start,
-                blank_at_end=config.phonemes.blank_at_end,
-                tone_before=config.phonemes.tone_before,
-                simple_punctuation=config.phonemes.simple_punctuation,
-                punctuation_map=config.phonemes.punctuation_map,
-                separate=config.phonemes.separate,
-                separate_graphemes=config.phonemes.separate_graphemes,
-                separate_tones=config.phonemes.separate_tones,
-                phoneme_map=config.phonemes.phoneme_map,
-                auto_bos_eos=config.phonemes.auto_bos_eos,
-            )
+#     phoneme_to_id = {}
 
-            ids_str = " ".join(str(p_id) for p_id in phoneme_ids)
+#     if config.phonemes.pad and (config.phonemes.pad not in phoneme_to_id):
+#         # Add pad symbol
+#         phoneme_to_id[config.phonemes.pad] = len(phoneme_to_id)
 
-            writer.writerow((*row, ids_str))
+#     if config.phonemes.bos and (config.phonemes.bos not in phoneme_to_id):
+#         # Add BOS symbol
+#         phoneme_to_id[config.phonemes.bos] = len(phoneme_to_id)
+
+#     if config.phonemes.eos and (config.phonemes.eos not in phoneme_to_id):
+#         # Add EOS symbol
+#         phoneme_to_id[config.phonemes.eos] = len(phoneme_to_id)
+
+#     if config.phonemes.blank and (config.phonemes.blank not in phoneme_to_id):
+#         # Add blank symbol
+#         phoneme_to_id[config.phonemes.blank] = len(phoneme_to_id)
+
+#     if config.phonemes.blank_word and (config.phonemes.blank_word not in phoneme_to_id):
+#         # Add blank symbol
+#         phoneme_to_id[config.phonemes.blank_word] = len(phoneme_to_id)
+
+#     for phoneme in sorted(all_phonemes):
+#         if phoneme not in phoneme_to_id:
+#             phoneme_to_id[phoneme] = len(phoneme_to_id)
+
+#     # Write id<space>phoneme
+#     with open(phoneme_map_path, "w", encoding="utf-8") as map_file:
+#         for phoneme, phoneme_id in phoneme_to_id.items():
+#             print(phoneme_id, phoneme, file=map_file)
+
+
+# def make_dataset_ids(
+#     config: TrainingConfig,
+#     phonemes_csv_path: typing.Union[str, Path],
+#     ids_csv_path: typing.Union[str, Path],
+# ):
+#     assert config.phonemes.phoneme_to_id, "Phoneme/id map is required"
+
+#     with open(phonemes_csv_path, "r", encoding="utf-8") as phonemes_file, open(
+#         ids_csv_path, "w", encoding="utf-8"
+#     ) as ids_file:
+#         reader = csv.reader(phonemes_file, delimiter="|")
+#         writer = csv.writer(ids_file, delimiter="|")
+
+#         for row in reader:
+#             phonemes_str = row[-1]
+#             word_phonemes = [
+#                 word_str.split(config.phonemes.phoneme_separator)
+#                 for word_str in phonemes_str.split(config.phonemes.word_separator)
+#             ]
+
+#             phoneme_ids = phonemes2ids.phonemes2ids(
+#                 word_phonemes=word_phonemes,
+#                 phoneme_to_id=config.phonemes.phoneme_to_id,
+#                 pad=config.phonemes.pad,
+#                 bos=config.phonemes.bos,
+#                 eos=config.phonemes.eos,
+#                 blank=config.phonemes.blank,
+#                 blank_word=config.phonemes.blank_word,
+#                 blank_between=config.phonemes.blank_between,
+#                 blank_at_start=config.phonemes.blank_at_start,
+#                 blank_at_end=config.phonemes.blank_at_end,
+#                 tone_before=config.phonemes.tone_before,
+#                 simple_punctuation=config.phonemes.simple_punctuation,
+#                 punctuation_map=config.phonemes.punctuation_map,
+#                 separate=config.phonemes.separate,
+#                 separate_graphemes=config.phonemes.separate_graphemes,
+#                 separate_tones=config.phonemes.separate_tones,
+#                 phoneme_map=config.phonemes.phoneme_map,
+#                 auto_bos_eos=config.phonemes.auto_bos_eos,
+#             )
+
+#             ids_str = " ".join(str(p_id) for p_id in phoneme_ids)
+
+#             writer.writerow((*row, ids_str))
 
 
 def load_dataset(
     config: TrainingConfig,
     dataset_name: str,
     metadata_dir: typing.Union[str, Path],
-    audio_dir: typing.Union[str, Path],
+    cache_dir: typing.Union[str, Path],
     splits=("train", "val"),
 ) -> DatasetInfo:
     metadata_dir = Path(metadata_dir)
-    audio_dir = Path(audio_dir)
+    cache_dir = Path(cache_dir)
+
     multispeaker = config.model.n_speakers > 1
+
+    ids_format = MetadataFormat.PHONEME_IDS.value
 
     # Determine data paths
     data_paths = defaultdict(dict)
     for split in splits:
-        csv_path = metadata_dir / f"{split}_ids.csv"
+        csv_path = metadata_dir / f"{split}_{ids_format}.csv"
         assert csv_path.is_file(), f"Missing {csv_path}"
 
         data_paths[split]["csv_path"] = csv_path
@@ -436,7 +394,7 @@ def load_dataset(
 
     num_phonemes_too_small = 0
     num_phonemes_too_large = 0
-    num_audio_missing = 0
+    num_spec_missing = 0
 
     for utt_id, phoneme_ids in utt_phoneme_ids.items():
         # Check phonemes length
@@ -454,17 +412,15 @@ def load_dataset(
             num_phonemes_too_large += 1
             continue
 
-        # Check if audio file is missing
-        audio_path = audio_dir / utt_id
-        if not audio_path.is_file():
-            # Try WAV extension
-            audio_path = audio_dir / f"{utt_id}.wav"
+        # Check if spec file is missing
+        spec_path = cache_dir / f"{utt_id}.spec.pt"
 
-        if not audio_path.is_file():
+        if not spec_path.is_file():
             drop_utt_ids.add(utt_id)
             _LOGGER.warning(
-                "Dropped %s because audio file is missing: %s", utt_id, audio_path
+                "Dropped %s because spec file is missing: %s", utt_id, spec_path
             )
+            num_spec_missing += 1
             continue
 
     # Filter out dropped utterances
@@ -485,10 +441,9 @@ def load_dataset(
                 config.max_seq_length,
             )
 
-        if num_audio_missing > 0:
+        if num_spec_missing > 0:
             _LOGGER.debug(
-                "%s utterance(s) dropped whose audio file was missing",
-                num_audio_missing,
+                "%s utterance(s) dropped whose spec file was missing", num_spec_missing,
             )
 
         utt_phoneme_ids = {
@@ -504,7 +459,7 @@ def load_dataset(
 
     return DatasetInfo(
         name=dataset_name,
-        audio_dir=audio_dir,
+        cache_dir=cache_dir,
         utt_phoneme_ids=utt_phoneme_ids,
         utt_speaker_ids=utt_speaker_ids,
         split_ids={

@@ -6,7 +6,6 @@ import random
 import typing
 from pathlib import Path
 
-import phonemes2ids
 import torch
 import torch.multiprocessing
 from torch.nn.parallel import DistributedDataParallel
@@ -18,10 +17,7 @@ from glow_tts_train.config import TrainingConfig
 from glow_tts_train.dataset import (
     PhonemeIdsAndMelsDataset,
     UtteranceCollate,
-    learn_dataset_ids,
     load_dataset,
-    make_dataset_ids,
-    make_dataset_phonemes,
 )
 from glow_tts_train.ddi import initialize_model
 from glow_tts_train.models import ModelType
@@ -35,7 +31,7 @@ def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(prog="glow-tts-train")
     parser.add_argument(
-        "--output", required=True, help="Directory to store model artifacts"
+        "--output-dir", required=True, help="Directory to store model artifacts"
     )
     parser.add_argument(
         "--config", required=True, help="Path to JSON configuration file"
@@ -57,8 +53,7 @@ def main():
     parser.add_argument(
         "--checkpoint-epochs",
         type=int,
-        default=100,
-        help="Number of epochs between checkpoints",
+        help="Number of epochs between checkpoints (default: use config)",
     )
     parser.add_argument(
         "--no-restore-optimizer",
@@ -69,10 +64,6 @@ def main():
         "--no-restore-scheduler",
         action="store_true",
         help="Don't load the scheduler state from checkpoint",
-    )
-    parser.add_argument(
-        "--cache",
-        help="Directory to store cached spectrograms (default: <output>/cache",
     )
     parser.add_argument("--local_rank", type=int, help="Rank for multi-GPU training")
     parser.add_argument(
@@ -105,42 +96,25 @@ def main():
     # -------------------------------------------------------------------------
 
     # Convert to paths
-    args.output = Path(args.output)
-    args.dataset = [
-        (dataset_name, Path(phonemes_path), Path(audio_dir))
-        for dataset_name, phonemes_path, audio_dir in args.dataset
-    ]
-
-    if args.config:
-        args.config = [Path(p) for p in args.config]
-    else:
-        output_config_path = args.output / "config.json"
-        assert (
-            output_config_path.is_file()
-        ), f"No config file found at {output_config_path}"
-
-        args.config = [output_config_path]
+    args.output_dir = Path(args.output_dir)
+    args.config = Path(args.config)
 
     if args.checkpoint:
         args.checkpoint = Path(args.checkpoint)
 
-    if args.cache:
-        args.cache = Path(args.cache)
-    else:
-        args.cache = args.output / "cache"
-
     # Load configuration
-    config = TrainingConfig()
-    if args.config:
-        _LOGGER.debug("Loading configuration(s) from %s", args.config)
-        config = TrainingConfig.load_and_merge(config, args.config)
+    _LOGGER.debug("Loading configuration(s) from %s", args.config)
+    with open(args.config, "r", encoding="utf-8") as config_file:
+        config = TrainingConfig.load(config_file)
 
     config.git_commit = args.git_commit
 
     _LOGGER.debug(config)
 
+    assert config.model.num_symbols > 0, "Please set model.num_symbols in config"
+
     # Create output directory
-    args.output.mkdir(parents=True, exist_ok=True)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
 
     _LOGGER.debug("Setting random seed to %s", config.seed)
     random.seed(config.seed)
@@ -150,6 +124,10 @@ def main():
         # Use command-line option
         config.epochs = args.epochs
 
+    if args.checkpoint_epochs is not None:
+        # Use command-line option
+        config.checkpoint_epochs = args.checkpoint_epochs
+
     num_speakers = config.model.n_speakers
     if num_speakers > 1:
         assert (
@@ -157,100 +135,28 @@ def main():
         ), "Multispeaker model must have gin_channels > 0"
 
     assert (
-        len(args.dataset) <= num_speakers
+        len(config.datasets) <= num_speakers
     ), "More datasets than speakers in model config"
 
-    if len(args.dataset) < num_speakers:
+    if len(config.datasets) < num_speakers:
         _LOGGER.warning(
             "Model has %s speaker(s), but only %s dataset(s) were provided",
             num_speakers,
-            len(args.dataset),
+            len(config.datasets),
         )
 
-    # text -> phonemes
-    phonemes_csv_paths = []
-    for dataset_name, metadata_dir, audio_dir in args.dataset:
-        metadata_dir = Path(metadata_dir)
-
-        text_csv_path = metadata_dir / "all_text.csv"
-        phonemes_csv_path = metadata_dir / "all_phonemes.csv"
-
-        if not phonemes_csv_path.is_file():
-            make_dataset_phonemes(config, text_csv_path, phonemes_csv_path)
-
-        phonemes_csv_paths.append(phonemes_csv_path)
-
-    # id <-> phoneme map
-    if not config.phonemes.phoneme_to_id:
-        phoneme_map_path = args.output / "phonemes.txt"
-        if not phoneme_map_path.is_file():
-            learn_dataset_ids(config, phonemes_csv_paths, phoneme_map_path)
-
-        with open(phoneme_map_path, "r", encoding="utf-8") as map_file:
-            config.phonemes.phoneme_to_id = phonemes2ids.load_phoneme_ids(map_file)
-
-    if config.model.num_symbols < 1:
-        # Automatically set
-        config.model.num_symbols = len(config.phonemes.phoneme_to_id)
-
-    # phonemes -> ids
+    # Load datasets
     datasets = []
-    for dataset_name, metadata_dir, audio_dir in args.dataset:
-        metadata_dir = Path(metadata_dir)
-        audio_dir = Path(audio_dir)
 
-        train_csv_path = metadata_dir / "train_ids.csv"
-        val_csv_path = metadata_dir / "val_ids.csv"
-
-        if (not train_csv_path.is_file()) or (not val_csv_path.is_file()):
-            phonemes_csv_path = metadata_dir / "all_phonemes.csv"
-            ids_csv_path = metadata_dir / "all_ids.csv"
-
-            if not ids_csv_path.is_file():
-                make_dataset_ids(config, phonemes_csv_path, ids_csv_path)
-
-            num_utterances = 0
-            with open(ids_csv_path, "r", encoding="utf-8") as ids_file:
-                for line in ids_file:
-                    if line.strip():
-                        num_utterances += 1
-
-            num_val = num_utterances // 10
-            num_train = num_utterances - num_val
-
-            with open(ids_csv_path, "r", encoding="utf-8") as ids_file, open(
-                train_csv_path, "w", encoding="utf-8"
-            ) as train_file, open(val_csv_path, "w", encoding="utf-8") as val_file:
-                line_idx = 0
-                for line in ids_file:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    if line_idx < num_train:
-                        print(line, file=train_file)
-                    else:
-                        print(line, file=val_file)
-
-                    line_idx += 1
-
-        datasets.append(
-            load_dataset(
-                config=config,
-                dataset_name=dataset_name,
-                metadata_dir=metadata_dir,
-                audio_dir=audio_dir,
-            )
-        )
+    for dataset in config.datasets:
+        dataset_dir = args.output_dir / dataset.name
+        cache_dir = dataset.get_cache_dir(args.output_dir)
+        datasets.append(load_dataset(config, dataset.name, dataset_dir, cache_dir))
 
     # Create data loader
     batch_size = config.batch_size if args.batch_size is None else args.batch_size
-    train_dataset = PhonemeIdsAndMelsDataset(
-        config, datasets, split="train", cache_dir=args.cache
-    )
-    val_dataset = PhonemeIdsAndMelsDataset(
-        config, datasets, split="val", cache_dir=args.cache
-    )
+    train_dataset = PhonemeIdsAndMelsDataset(config, datasets, split="train")
+    val_dataset = PhonemeIdsAndMelsDataset(config, datasets, split="val")
     collate_fn = UtteranceCollate()
 
     train_loader = DataLoader(
@@ -326,11 +232,10 @@ def main():
             train_loader=train_loader,
             val_loader=val_loader,
             config=config,
-            model_dir=args.output,
+            model_dir=args.output_dir,
             model=model,
             optimizer=optimizer,
             scheduler=scheduler,
-            checkpoint_epochs=args.checkpoint_epochs,
             rank=(local_rank if is_distributed else 0),
         )
         _LOGGER.info("Training finished")

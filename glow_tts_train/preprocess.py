@@ -691,15 +691,7 @@ def task_mels_align():
 def make_mels(
     audio_csv_path: typing.Union[str, Path], dataset_config: DatasetConfig, targets
 ):
-
-    if dataset_config.cache_dir is not None:
-        cache_dir = Path(dataset_config.cache_dir)
-    else:
-        cache_dir = Path("cache") / dataset_config.name
-
-    if not cache_dir.is_absolute():
-        cache_dir = _OUTPUT_DIR / str(cache_dir)
-
+    cache_dir = dataset_config.get_cache_dir(_OUTPUT_DIR)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     target_path = Path(targets[0])
