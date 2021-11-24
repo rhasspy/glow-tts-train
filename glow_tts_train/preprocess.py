@@ -807,6 +807,109 @@ def task_mel_stats():
 
 # -----------------------------------------------------------------------------
 
+
+def make_single_speakers(dataset_name: str, targets):
+    target_path = Path(targets[0])
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(dataset_name)
+
+
+def make_multiple_speakers(
+    ids_csv_paths: typing.List[typing.Union[str, Path]], targets
+):
+    target_path = Path(targets[0])
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    speakers: typing.Set[str] = set()
+    for ids_csv_path in ids_csv_paths:
+        with open(ids_csv_path, "r", encoding="utf-8") as input_file:
+            reader = csv.reader(input_file, delimiter=_DELIMITER)
+            for row in reader:
+                speaker = row[1]
+                speakers.add(speaker)
+
+    with open(target_path, "w", encoding="utf-8") as output_file:
+        for speaker in sorted(speakers):
+            print(speaker, file=output_file)
+
+
+def task_speakers():
+    if not _CONFIG.is_multispeaker:
+        return
+
+    ids_format = MetadataFormat.PHONEME_IDS
+
+    for dataset in _CONFIG.datasets:
+        dataset_dir = _OUTPUT_DIR / dataset.name
+        speakers_path = dataset_dir / "speakers.txt"
+
+        if dataset.multispeaker:
+            ids_csv_paths = []
+
+            for split in ("train", "val"):
+                ids_csv_path = dataset_dir / f"{split}_{ids_format}.csv"
+                ids_csv_paths.append(ids_csv_path)
+
+            yield {
+                "name": str(speakers_path.relative_to(_OUTPUT_DIR)),
+                "actions": [(make_multiple_speakers, [ids_csv_paths])],
+                "file_dep": ids_csv_paths,
+                "targets": [speakers_path],
+            }
+        else:
+            yield {
+                "name": str(speakers_path.relative_to(_OUTPUT_DIR)),
+                "actions": [(make_single_speakers, [dataset.name])],
+                "targets": [speakers_path],
+                "uptodate": True,
+            }
+
+
+def make_speaker_map(
+    speakers_paths: typing.Dict[str, typing.Union[str, Path]], targets
+):
+    target_path = Path(targets[0])
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    speaker_idx = 0
+
+    with open(target_path, "w", encoding="utf-8") as output_file:
+        writer = csv.writer(output_file, delimiter=_DELIMITER)
+        for dataset_name, speakers_path in speakers_paths.items():
+            with open(speakers_path, "r", encoding="utf-8") as input_file:
+                for line in input_file:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    speaker = line
+                    writer.writerow((str(speaker_idx), dataset_name, speaker))
+
+                    speaker_idx += 1
+
+
+def task_speaker_map():
+    if not _CONFIG.is_multispeaker:
+        return
+
+    speaker_map_path = _OUTPUT_DIR / "speaker_map.csv"
+    speakers_paths = {}
+
+    for dataset in _CONFIG.datasets:
+        dataset_dir = _OUTPUT_DIR / dataset.name
+        speakers_path = dataset_dir / "speakers.txt"
+        speakers_paths[dataset.name] = speakers_path
+
+    yield {
+        "name": str(speaker_map_path.relative_to(_OUTPUT_DIR)),
+        "actions": [(make_speaker_map, [speakers_paths])],
+        "file_dep": list(speakers_paths.values()),
+        "targets": [speaker_map_path],
+    }
+
+
+# -----------------------------------------------------------------------------
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", help="Path to JSON configuration file")

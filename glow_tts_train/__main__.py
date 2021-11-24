@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 import logging
 import os
 import random
 import typing
+from collections import defaultdict
 from pathlib import Path
 
 import torch
@@ -128,22 +130,26 @@ def main():
         # Use command-line option
         config.checkpoint_epochs = args.checkpoint_epochs
 
-    num_speakers = config.model.n_speakers
-    if num_speakers > 1:
+    # dataset -> speaker -> id
+    speaker_id_map: typing.Dict[str, typing.Dict[str, int]] = defaultdict(dict)
+
+    if config.is_multispeaker:
+        assert (
+            config.model.n_speakers > 1
+        ), "Multispeaker model must have n_speakers > 1"
+
         assert (
             config.model.gin_channels > 0
         ), "Multispeaker model must have gin_channels > 0"
 
-    assert (
-        len(config.datasets) <= num_speakers
-    ), "More datasets than speakers in model config"
+        speaker_map_path = args.output_dir / "speaker_map.csv"
+        _LOGGER.debug("Loading speaker id map from %s", speaker_map_path)
 
-    if len(config.datasets) < num_speakers:
-        _LOGGER.warning(
-            "Model has %s speaker(s), but only %s dataset(s) were provided",
-            num_speakers,
-            len(config.datasets),
-        )
+        with open(speaker_map_path, "r", encoding="utf-8") as speaker_map_file:
+            reader = csv.reader(speaker_map_file, delimiter="|")
+            for row in reader:
+                speaker_id, dataset_name, speaker_name = int(row[0]), row[1], row[2]
+                speaker_id_map[dataset_name][speaker_name] = speaker_id
 
     # Load datasets
     datasets = []
@@ -151,7 +157,15 @@ def main():
     for dataset in config.datasets:
         dataset_dir = args.output_dir / dataset.name
         cache_dir = dataset.get_cache_dir(args.output_dir)
-        datasets.append(load_dataset(config, dataset.name, dataset_dir, cache_dir))
+        datasets.append(
+            load_dataset(
+                config,
+                dataset.name,
+                dataset_dir,
+                cache_dir,
+                speaker_id_map=speaker_id_map.get(dataset.name),
+            )
+        )
 
     # Create data loader
     batch_size = config.batch_size if args.batch_size is None else args.batch_size

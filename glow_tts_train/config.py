@@ -237,6 +237,10 @@ class ModelConfig(DataClassJsonMixin):
     gin_channels: int = 0
     n_frames_per_step: int = 1
 
+    @property
+    def is_multispeaker(self):
+        return self.n_speakers > 1
+
 
 @dataclass
 class PhonemesConfig(DataClassJsonMixin):
@@ -326,7 +330,7 @@ class DatasetConfig:
             cache_dir = Path("cache") / self.name
 
         if not cache_dir.is_absolute():
-            cache_dir = output_dir / str(cache_dir)
+            cache_dir = Path(output_dir) / str(cache_dir)
 
         return cache_dir
 
@@ -357,8 +361,6 @@ class TrainingConfig(DataClassJsonMixin):
     min_seq_length: typing.Optional[int] = None
     max_seq_length: typing.Optional[int] = None
 
-    speaker_id_map: typing.Optional[typing.Dict[str, int]] = None
-
     audio: AudioConfig = field(default_factory=AudioConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     phonemes: PhonemesConfig = field(default_factory=PhonemesConfig)
@@ -370,6 +372,14 @@ class TrainingConfig(DataClassJsonMixin):
 
     version: int = 1
     git_commit: str = ""
+
+    @property
+    def is_multispeaker(self):
+        return (
+            self.model.is_multispeaker
+            or (len(self.datasets) > 1)
+            or any(d.multispeaker for d in self.datasets)
+        )
 
     def save(self, config_file: typing.TextIO):
         """Save config as JSON to a file"""
