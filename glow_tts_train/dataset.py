@@ -10,6 +10,7 @@ import torch
 from torch.utils.data import Dataset
 
 from glow_tts_train.config import MetadataFormat, TrainingConfig
+from glow_tts_train.utils import StandardScaler
 
 _LOGGER = logging.getLogger("glow_tts_train.dataset")
 
@@ -65,12 +66,14 @@ class PhonemeIdsAndMelsDataset(Dataset):
         config: TrainingConfig,
         datasets: typing.Sequence[DatasetInfo],
         split: str,
+        mel_scaler: typing.Optional[StandardScaler] = None,
     ):
         super().__init__()
 
         self.config = config
         self.utterances = []
         self.split = split
+        self.mel_scaler = mel_scaler
 
         for dataset in datasets:
             for utt_id in dataset.split_ids.get(split, []):
@@ -93,7 +96,8 @@ class PhonemeIdsAndMelsDataset(Dataset):
         spectrogram_path = utterance.spec_path
         spectrogram = torch.load(str(spectrogram_path))
 
-        # TODO: scale spec
+        if self.mel_scaler is not None:
+            self.mel_scaler.transform(spectrogram)
 
         speaker_id = None
         if utterance.speaker_id is not None:
@@ -304,7 +308,8 @@ def load_dataset(
 
         if num_spec_missing > 0:
             _LOGGER.debug(
-                "%s utterance(s) dropped whose spec file was missing", num_spec_missing,
+                "%s utterance(s) dropped whose spec file was missing",
+                num_spec_missing,
             )
 
         utt_phoneme_ids = {

@@ -1,4 +1,5 @@
 import math
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -46,10 +47,10 @@ def sequence_mask(length, max_length=None):
 
 
 def maximum_path(value, mask, max_neg_val=-np.inf):
-    """ Numpy-friendly version. It's about 4 times faster than torch version.
-  value: [b, t_x, t_y]
-  mask: [b, t_x, t_y]
-  """
+    """Numpy-friendly version. It's about 4 times faster than torch version.
+    value: [b, t_x, t_y]
+    mask: [b, t_x, t_y]
+    """
     value = value * mask
 
     device = value.device
@@ -87,9 +88,9 @@ def maximum_path(value, mask, max_neg_val=-np.inf):
 
 def generate_path(duration, mask):
     """
-  duration: [b, t_x]
-  mask: [b, t_x, t_y]
-  """
+    duration: [b, t_x]
+    mask: [b, t_x, t_y]
+    """
     device = duration.device
 
     b, t_x, t_y = mask.shape
@@ -162,3 +163,19 @@ def audio_float_to_int16(
     audio_norm = np.clip(audio_norm, -max_wav_value, max_wav_value)
     audio_norm = audio_norm.astype("int16")
     return audio_norm
+
+
+@dataclass
+class StandardScaler:
+    mean: np.ndarray
+    scale: np.ndarray
+
+    def transform(self, data: np.ndarray) -> np.ndarray:
+        data -= self.mean
+        data /= self.scale
+        return data
+
+    def inverse_transform(self, data: np.ndarray) -> np.ndarray:
+        data *= self.scale
+        data += self.mean
+        return data

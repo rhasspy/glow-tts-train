@@ -26,6 +26,7 @@ from glow_tts_train.ddi import initialize_model
 from glow_tts_train.models import ModelType
 from glow_tts_train.optimize import OptimizerType, SchedulerType
 from glow_tts_train.train import train
+from glow_tts_train.utils import StandardScaler
 
 _LOGGER = logging.getLogger("glow_tts_train")
 
@@ -131,11 +132,14 @@ def main():
         # Use command-line option
         config.checkpoint_epochs = args.checkpoint_epochs
 
+    mel_scaler: typing.Optional[StandardScaler] = None
+
     scale_stats_path = args.output_dir / "scale_stats.npy"
     if scale_stats_path.is_file():
         _LOGGER.debu("Loading scale stats from %s", scale_stats_path)
 
         scale_stats = np.load(scale_stats_path, allow_pickle=True)
+        mel_scaler = StandardScaler(scale_stats["mel_mean"], scale_stats["mel_scale"])
 
     # dataset -> speaker -> id
     speaker_id_map: typing.Dict[str, typing.Dict[str, int]] = defaultdict(dict)
@@ -176,8 +180,12 @@ def main():
 
     # Create data loader
     batch_size = config.batch_size if args.batch_size is None else args.batch_size
-    train_dataset = PhonemeIdsAndMelsDataset(config, datasets, split="train")
-    val_dataset = PhonemeIdsAndMelsDataset(config, datasets, split="val")
+    train_dataset = PhonemeIdsAndMelsDataset(
+        config, datasets, split="train", mel_scaler=mel_scaler
+    )
+    val_dataset = PhonemeIdsAndMelsDataset(
+        config, datasets, split="val", mel_scaler=mel_scaler
+    )
     collate_fn = UtteranceCollate()
 
     train_loader = DataLoader(

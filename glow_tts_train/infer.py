@@ -7,14 +7,16 @@ import logging
 import os
 import sys
 import time
+import typing
 from pathlib import Path
 
 import jsonlines
 import numpy as np
 import torch
 
-from .checkpoint import load_checkpoint
-from .config import TrainingConfig
+from glow_tts_train.checkpoint import load_checkpoint
+from glow_tts_train.config import TrainingConfig
+from glow_tts_train.utils import StandardScaler
 
 _LOGGER = logging.getLogger("glow_tts_train.infer")
 
@@ -81,6 +83,11 @@ def main():
     assert (
         config.model.num_symbols > 0
     ), "Number of symbols not set (did you forget --config or --num-symbols?)"
+
+    mel_scaler: typing.Optional[StandardScaler] = None
+    if args.scale_stats:
+        scale_stats = np.load(args.scale_stats, allow_pickle=True)
+        mel_scaler = StandardScaler(scale_stats["mel_mean"], scale_stats["mel_scale"])
 
     # Default mel settings
     output_obj = {"id": "", "audio": dataclasses.asdict(config.audio), "mel": []}
@@ -179,6 +186,9 @@ def main():
 
                 # Write mel spectrogram and settings as a JSON object on one line
                 mel = mel.squeeze(0).cpu().float().numpy()
+
+                if mel_scaler is not None:
+                    mel = mel_scaler.inverse_transform(mel)
 
                 if args.numpy_dir:
                     if not utt_id:
