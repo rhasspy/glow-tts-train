@@ -97,7 +97,10 @@ class PhonemeIdsAndMelsDataset(Dataset):
         spectrogram = torch.load(str(spectrogram_path))
 
         if self.mel_scaler is not None:
-            self.mel_scaler.transform(spectrogram)
+            spectrogram = self.mel_scaler.transform(spectrogram.T).T
+
+        if self.config.audio.signal_norm:
+            spectrogram = self.config.audio.normalize(spectrogram)
 
         speaker_id = None
         if utterance.speaker_id is not None:

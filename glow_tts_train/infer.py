@@ -85,9 +85,11 @@ def main():
     ), "Number of symbols not set (did you forget --config or --num-symbols?)"
 
     mel_scaler: typing.Optional[StandardScaler] = None
-    if args.scale_stats:
-        scale_stats = np.load(args.scale_stats, allow_pickle=True)
+    if config.audio.scale_mels:
+        assert args.scale_stats, "--scale-stats is required"
+        scale_stats = np.load(args.scale_stats, allow_pickle=True).tolist()
         mel_scaler = StandardScaler(scale_stats["mel_mean"], scale_stats["mel_scale"])
+        _LOGGER.debug("Using mel scaler")
 
     # Default mel settings
     output_obj = {"id": "", "audio": dataclasses.asdict(config.audio), "mel": []}
@@ -188,7 +190,7 @@ def main():
                 mel = mel.squeeze(0).cpu().float().numpy()
 
                 if mel_scaler is not None:
-                    mel = mel_scaler.inverse_transform(mel)
+                    mel = mel_scaler.inverse_transform(mel.T).T
 
                 if args.numpy_dir:
                     if not utt_id:

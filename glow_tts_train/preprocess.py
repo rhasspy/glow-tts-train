@@ -779,12 +779,15 @@ def make_mel_stats(cache_csv_paths: typing.Iterable[typing.Union[str, Path]], ta
 
     mel_mean = total_mel_sum / total_mel_n
     mel_scale = np.sqrt(total_mel_square_sum / total_mel_n - mel_mean ** 2)
-    stats = {"mel_mean": mel_mean, "mel_scale": mel_scale}
+    stats = {"mel_mean": mel_mean.numpy(), "mel_scale": mel_scale.numpy()}
 
     np.save(target_path, stats, allow_pickle=True)
 
 
 def task_mel_stats():
+    if not _CONFIG.audio.scale_mels:
+        return
+
     text_format = MetadataFormat.TEXT.value
 
     stats_path = _OUTPUT_DIR / "scale_stats.npy"
@@ -912,8 +915,10 @@ def task_speaker_map():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", help="Path to JSON configuration file")
-    parser.add_argument("--output-dir", help="Path to output directory")
+    parser.add_argument(
+        "--config", required=True, help="Path to JSON configuration file"
+    )
+    parser.add_argument("--output-dir", required=True, help="Path to output directory")
     args, rest_args = parser.parse_known_args()
 
     logging.basicConfig(level=logging.INFO)

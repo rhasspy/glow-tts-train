@@ -39,6 +39,8 @@ class AudioConfig(DataClassJsonMixin):
     do_trim_silence: bool = False
     trim_silence_db: float = 60.0
 
+    scale_mels: bool = False
+
     def __post_init__(self):
         if self.mel_fmax is not None:
             assert self.mel_fmax <= self.sample_rate // 2
@@ -58,7 +60,7 @@ class AudioConfig(DataClassJsonMixin):
     # Mel Spectrogram
     # -------------------------------------------------------------------------
 
-    def wav2mel(self, wav: np.ndarray) -> np.ndarray:
+    def wav2mel(self, wav: np.ndarray, normalize: bool = False) -> np.ndarray:
         if self.do_trim_silence:
             wav = self.trim_silence(wav, trim_db=self.trim_silence_db)
 
@@ -66,16 +68,20 @@ class AudioConfig(DataClassJsonMixin):
         mel_amp = self.linear_to_mel(np.abs(linear))
         mel_db = self.amp_to_db(mel_amp)
 
-        if self.signal_norm:
+        if normalize and self.signal_norm:
             mel_db = self.normalize(mel_db)
 
         return mel_db
 
     def mel2wav(
-        self, mel_db: np.ndarray, num_iters: int = 60, power: float = 1.0
+        self,
+        mel_db: np.ndarray,
+        num_iters: int = 60,
+        power: float = 1.0,
+        denormalize: bool = False,
     ) -> np.ndarray:
         """Converts melspectrogram to waveform using Griffim-Lim"""
-        if self.signal_norm:
+        if denormalize and self.signal_norm:
             mel_db = self.denormalize(mel_db)
 
         mel_amp = self.db_to_amp(mel_db)

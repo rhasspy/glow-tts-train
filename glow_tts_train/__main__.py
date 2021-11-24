@@ -134,12 +134,16 @@ def main():
 
     mel_scaler: typing.Optional[StandardScaler] = None
 
-    scale_stats_path = args.output_dir / "scale_stats.npy"
-    if scale_stats_path.is_file():
-        _LOGGER.debu("Loading scale stats from %s", scale_stats_path)
+    if config.audio.scale_mels:
+        scale_stats_path = args.output_dir / "scale_stats.npy"
+        assert scale_stats_path.is_file(), f"Missing {scale_stats_path}"
 
-        scale_stats = np.load(scale_stats_path, allow_pickle=True)
+        _LOGGER.debug("Loading scale stats from %s", scale_stats_path)
+
+        scale_stats = np.load(scale_stats_path, allow_pickle=True).tolist()
         mel_scaler = StandardScaler(scale_stats["mel_mean"], scale_stats["mel_scale"])
+
+        _LOGGER.debug("Using mel scaler")
 
     # dataset -> speaker -> id
     speaker_id_map: typing.Dict[str, typing.Dict[str, int]] = defaultdict(dict)
