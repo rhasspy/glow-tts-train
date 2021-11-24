@@ -29,6 +29,7 @@ def main():
     parser.add_argument(
         "--config", action="append", help="Path to JSON configuration file(s)"
     )
+    parser.add_argument("--scale-stats", help="Path to numpy mel mean/std file")
     parser.add_argument(
         "--num-symbols", type=int, help="Number of symbols in the model"
     )
@@ -106,13 +107,14 @@ def main():
         checkpoint = load_checkpoint(args.checkpoint, config, use_cuda=args.cuda)
         end_time = time.perf_counter()
 
-        model, _ = checkpoint.model, checkpoint.optimizer
         _LOGGER.info(
             "Loaded checkpoint from %s in %s second(s) (global step=%s)",
             args.checkpoint,
             end_time - start_time,
             checkpoint.global_step,
         )
+
+        model = checkpoint.model
 
         # Do not calcuate jacobians for fast decoding
         model.decoder.store_inverse()

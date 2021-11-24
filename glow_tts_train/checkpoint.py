@@ -84,20 +84,22 @@ def load_checkpoint(
     if model is None:
         model = setup_model(config, use_cuda=use_cuda)
 
+    # Load scheduler state
+    if load_scheduler and ("scheduler" in checkpoint_dict):
+        if scheduler is None:
+            if optimizer is None:
+                optimizer = setup_optimizer(config, model)
+
+            scheduler = setup_scheduler(config, optimizer)
+
+        scheduler.load_state_dict(checkpoint_dict["scheduler"])
+
     # Load optimizer state
     if load_optimizer and ("optimizer" in checkpoint_dict):
         if optimizer is None:
             optimizer = setup_optimizer(config, model)
 
         optimizer.load_state_dict(checkpoint_dict["optimizer"])
-
-    # Load scheduler state
-    if load_scheduler and ("scheduler" in checkpoint_dict):
-        if scheduler is None:
-            assert optimizer is not None
-            scheduler = setup_scheduler(config, optimizer)
-
-        scheduler.load_state_dict(checkpoint_dict["scheduler"])
 
     saved_state_dict = checkpoint_dict["model"]
     if hasattr(model, "module"):

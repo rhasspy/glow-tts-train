@@ -8,6 +8,7 @@ import typing
 from collections import defaultdict
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.multiprocessing
 from torch.nn.parallel import DistributedDataParallel
@@ -129,6 +130,12 @@ def main():
     if args.checkpoint_epochs is not None:
         # Use command-line option
         config.checkpoint_epochs = args.checkpoint_epochs
+
+    scale_stats_path = args.output_dir / "scale_stats.npy"
+    if scale_stats_path.is_file():
+        _LOGGER.debu("Loading scale stats from %s", scale_stats_path)
+
+        scale_stats = np.load(scale_stats_path, allow_pickle=True)
 
     # dataset -> speaker -> id
     speaker_id_map: typing.Dict[str, typing.Dict[str, int]] = defaultdict(dict)

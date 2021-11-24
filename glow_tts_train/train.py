@@ -111,6 +111,7 @@ def train(
             _LOGGER.debug("Validation loss: %s (best=%s)", val_loss, best_val_loss)
 
             if (best_val_loss is None) or (val_loss < best_val_loss):
+                best_val_loss = val_loss
                 best_path = model_dir / "best_model.pth"
                 _LOGGER.debug("Saving best model to %s", best_path)
                 save_checkpoint(
@@ -126,7 +127,6 @@ def train(
                     best_path,
                 )
 
-                best_val_loss = val_loss
 
         epoch_end_time = time.perf_counter()
         _LOGGER.debug(
