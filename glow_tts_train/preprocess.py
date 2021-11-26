@@ -714,17 +714,17 @@ def make_audio_list_align(
 
 
 def task_mels_audio_list():
-    text_format = MetadataFormat.TEXT.value
+    metadata_format = _CONFIG.dataset_format.value
 
     for dataset in _CONFIG.datasets:
         dataset_dir = _OUTPUT_DIR / dataset.name
 
         for split in ("train", "val"):
-            audio_csv_path = dataset_dir / f"{split}_{text_format}_audio.csv"
+            audio_csv_path = dataset_dir / f"{split}_{metdata_format}_audio.csv"
 
             if _CONFIG.text_aligner.aligner is None:
                 # Create audio list that uses entire audio files
-                input_csv_path = dataset_dir / f"{split}_{text_format}.csv"
+                input_csv_path = dataset_dir / f"{split}_{metdata_format}.csv"
                 yield {
                     "name": str(audio_csv_path.relative_to(_OUTPUT_DIR)),
                     "actions": [(make_audio_list, [input_csv_path, dataset])],
@@ -733,7 +733,7 @@ def task_mels_audio_list():
                 }
             else:
                 # Create audio list with begin/end timestamps from alignment
-                align_csv_path = dataset_dir / f"{split}_{text_format}_align.csv"
+                align_csv_path = dataset_dir / f"{split}_{metdata_format}_align.csv"
                 yield {
                     "name": str(audio_csv_path.relative_to(_OUTPUT_DIR)),
                     "actions": [(make_audio_list_align, [align_csv_path, dataset])],
@@ -791,14 +791,14 @@ def make_mels(
 
 def task_mels():
     """Generate mel spectrograms from audio"""
-    text_format = MetadataFormat.TEXT.value
+    metadata_format = _CONFIG.dataset_format.value
 
     for dataset in _CONFIG.datasets:
         dataset_dir = _OUTPUT_DIR / dataset.name
 
         for split in ("train", "val"):
-            audio_csv_path = dataset_dir / f"{split}_{text_format}_audio.csv"
-            cache_csv_path = dataset_dir / f"{split}_{text_format}_cache.csv"
+            audio_csv_path = dataset_dir / f"{split}_{metadata_format}_audio.csv"
+            cache_csv_path = dataset_dir / f"{split}_{metadata_format}_cache.csv"
 
             yield {
                 "name": str(cache_csv_path.relative_to(_OUTPUT_DIR)),
@@ -866,7 +866,7 @@ def task_mel_stats():
     if not _CONFIG.audio.scale_mels:
         return
 
-    text_format = MetadataFormat.TEXT.value
+    metadata_format = _CONFIG.dataset_format.value
 
     stats_path = _OUTPUT_DIR / "scale_stats.npy"
     cache_csv_paths = []
@@ -875,7 +875,7 @@ def task_mel_stats():
         dataset_dir = _OUTPUT_DIR / dataset.name
 
         for split in ("train", "val"):
-            cache_csv_path = dataset_dir / f"{split}_{text_format}_cache.csv"
+            cache_csv_path = dataset_dir / f"{split}_{metadata_format}_cache.csv"
             cache_csv_paths.append(cache_csv_path)
 
     yield {
