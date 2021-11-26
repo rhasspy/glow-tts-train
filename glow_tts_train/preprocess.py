@@ -40,6 +40,7 @@ _LOGGER = logging.getLogger("preprocess")
 def make_split(
     input_csv_path: typing.Union[str, Path], val_split: float, val_random: bool, targets
 ):
+    """Split input metadata into train/validation sets"""
     train_path = Path(targets[0])
     train_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -76,6 +77,7 @@ def make_split(
 
 
 def task_split():
+    """Split input metadata into train/validation sets"""
     metadata_format = _CONFIG.dataset_format.value
 
     for dataset in _CONFIG.datasets:
@@ -110,6 +112,7 @@ def make_phoneme_ids(
     phoneme_map_path: typing.Union[str, Path],
     targets,
 ):
+    """Map phonemes to integer ids according to existing phoneme map (phonemes.txt)"""
     target_path = Path(targets[0])
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -155,6 +158,7 @@ def make_phoneme_ids(
 def make_phonemes(
     input_csv_path: typing.Union[str, Path], gruut_language: str, targets,
 ):
+    """Convert metadata text to phonemes using gruut"""
     target_path = Path(targets[0])
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -183,6 +187,7 @@ def make_phonemes(
 
 
 def task_text_to_ids():
+    """Transform metadata text to phonemes, then to integer ids"""
     if _CONFIG.dataset_format == MetadataFormat.PHONEME_IDS:
         # Ids should already exist
         return
@@ -248,6 +253,7 @@ def task_text_to_ids():
 def make_phoneme_map(
     phoneme_csv_paths: typing.Iterable[typing.Union[str, Path]], targets
 ):
+    """Learn mapping from phonemes to integer ids, and write phoneme map (phonemes.txt)"""
     target_path = Path(targets[0])
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -325,6 +331,7 @@ def make_phoneme_map(
 
 
 def task_learn_phoneme_map():
+    """Learn mapping from phonemes to integer ids, and write phoneme map (phonemes.txt)"""
     if _CONFIG.dataset_format == MetadataFormat.PHONEME_IDS:
         # Ids should already exist
         return
@@ -357,6 +364,7 @@ def task_learn_phoneme_map():
 def make_spoken_text(
     input_csv_path: typing.Union[str, Path], gruut_language: str, targets
 ):
+    """Extract only spoken words from metadata text using gruut (needed for alignment)"""
     target_path = Path(targets[0])
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -366,7 +374,7 @@ def make_spoken_text(
     elif _CONFIG.text_aligner.casing == TextCasing.UPPER:
         casing_func = str.upper
 
-    def add_spoken(row) -> str:
+    def add_spoken(row):
         raw_text = row[-1]
         spoken_texts = []
         for sentence in gruut.sentences(
@@ -392,6 +400,7 @@ def make_spoken_text(
 
 
 def task_spoken_text():
+    """Extract only spoken words from metadata text using gruut (needed for alignment)"""
     if _CONFIG.text_aligner.aligner is None:
         return
 
@@ -431,6 +440,7 @@ def make_kaldi_align(
     align_dir: typing.Union[str, Path],
     targets,
 ):
+    """Generate forced alignment between spoken text and audio"""
     from kaldi_align import KaldiAligner, Utterance
 
     assert (
@@ -486,6 +496,7 @@ def make_kaldi_align(
 
 
 def make_kaldi_align_csv(input_jsonl_path: typing.Union[str, Path], targets):
+    """Create CSV file from alignments with begin/end timestamps for audio and aligned phonemes"""
     target_path = Path(targets[0])
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -553,6 +564,7 @@ def make_phonemes_from_align(
     spoken_csv_path: typing.Union[str, Path],
     targets,
 ):
+    """Create metadata files with phonemes from alignment (instead of directly from gruut)"""
     target_path = Path(targets[0])
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -560,8 +572,8 @@ def make_phonemes_from_align(
     with open(align_csv_path, "r", encoding="utf-8") as align_file:
         reader = csv.reader(align_file, delimiter=_DELIMITER)
         for row in reader:
-            utt_id, phonemes_str = row[0], row[-1]
-            align_phonemes[utt_id] = phonemes_str
+            utt_id, align_phonemes_str = row[0], row[-1]
+            align_phonemes[utt_id] = align_phonemes_str
 
     with open(spoken_csv_path, "r", encoding="utf-8") as spoken_file, open(
         target_path, "w", encoding="utf-8"
@@ -577,6 +589,7 @@ def make_phonemes_from_align(
 
 
 def task_kaldi_align():
+    """Do forced alignment between metadata text and audio, create phonemes metadata files"""
     if _CONFIG.text_aligner.aligner != Aligner.KALDI_ALIGN:
         return
 
@@ -631,6 +644,41 @@ def task_kaldi_align():
 # -----------------------------------------------------------------------------
 
 
+def make_audio_list(
+    input_csv_path: typing.Union[str, Path], dataset_config: DatasetConfig, targets
+):
+    assert (
+        dataset_config.audio_dir is not None
+    ), f"Audio directory is required: {dataset_config}"
+    audio_dir = Path(dataset_config.audio_dir)
+
+    if not audio_dir.is_absolute():
+        audio_dir = _OUTPUT_DIR / str(audio_dir)
+
+    target_path = Path(targets[0])
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(input_csv_path, "r", encoding="utf-8") as input_file, open(
+        target_path, "w", encoding="utf-8"
+    ) as output_file:
+        reader = csv.reader(input_file, delimiter=_DELIMITER)
+        writer = csv.writer(output_file, delimiter=_DELIMITER)
+
+        for row in reader:
+            # end_ms = 0 indicates entire audio file should be used
+            utt_id, start_ms, end_ms = row[0], 0, 0
+
+            audio_path = audio_dir / utt_id
+            if not audio_path.is_file():
+                audio_path = audio_dir / f"{utt_id}.wav"
+
+            if not audio_path.is_file():
+                _LOGGER.warning("Missing audio file: %s", audio_path)
+                continue
+
+            writer.writerow((utt_id, start_ms, end_ms, str(audio_path)))
+
+
 def make_audio_list_align(
     align_csv_path: typing.Union[str, Path], dataset_config: DatasetConfig, targets
 ):
@@ -665,25 +713,33 @@ def make_audio_list_align(
             writer.writerow((utt_id, start_ms, end_ms, str(audio_path)))
 
 
-def task_mels_align():
-    if _CONFIG.text_aligner.aligner is None:
-        return
-
+def task_mels_audio_list():
     text_format = MetadataFormat.TEXT.value
 
     for dataset in _CONFIG.datasets:
         dataset_dir = _OUTPUT_DIR / dataset.name
 
         for split in ("train", "val"):
-            align_csv_path = dataset_dir / f"{split}_{text_format}_align.csv"
-            audio_csv_path = dataset_dir / f"{split}_{text_format}_align_audio.csv"
+            audio_csv_path = dataset_dir / f"{split}_{text_format}_audio.csv"
 
-            yield {
-                "name": str(audio_csv_path.relative_to(_OUTPUT_DIR)),
-                "actions": [(make_audio_list_align, [align_csv_path, dataset])],
-                "file_dep": [align_csv_path],
-                "targets": [audio_csv_path],
-            }
+            if _CONFIG.text_aligner.aligner is None:
+                # Create audio list that uses entire audio files
+                input_csv_path = dataset_dir / f"{split}_{text_format}.csv"
+                yield {
+                    "name": str(audio_csv_path.relative_to(_OUTPUT_DIR)),
+                    "actions": [(make_audio_list, [input_csv_path, dataset])],
+                    "file_dep": [input_csv_path],
+                    "targets": [audio_csv_path],
+                }
+            else:
+                # Create audio list with begin/end timestamps from alignment
+                align_csv_path = dataset_dir / f"{split}_{text_format}_align.csv"
+                yield {
+                    "name": str(audio_csv_path.relative_to(_OUTPUT_DIR)),
+                    "actions": [(make_audio_list_align, [align_csv_path, dataset])],
+                    "file_dep": [align_csv_path],
+                    "targets": [audio_csv_path],
+                }
 
 
 # -----------------------------------------------------------------------------
@@ -692,6 +748,7 @@ def task_mels_align():
 def make_mels(
     audio_csv_path: typing.Union[str, Path], dataset_config: DatasetConfig, targets
 ):
+    """Generate mel spectrograms from audio"""
     cache_dir = dataset_config.get_cache_dir(_OUTPUT_DIR)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -733,14 +790,15 @@ def make_mels(
 
 
 def task_mels():
+    """Generate mel spectrograms from audio"""
     text_format = MetadataFormat.TEXT.value
 
     for dataset in _CONFIG.datasets:
         dataset_dir = _OUTPUT_DIR / dataset.name
 
         for split in ("train", "val"):
-            audio_csv_path = dataset_dir / f"{split}_{text_format}_align_audio.csv"
-            cache_csv_path = dataset_dir / f"{split}_{text_format}_align_cache.csv"
+            audio_csv_path = dataset_dir / f"{split}_{text_format}_audio.csv"
+            cache_csv_path = dataset_dir / f"{split}_{text_format}_cache.csv"
 
             yield {
                 "name": str(cache_csv_path.relative_to(_OUTPUT_DIR)),
@@ -751,7 +809,7 @@ def task_mels():
 
 
 def make_mel_stats(cache_csv_paths: typing.Iterable[typing.Union[str, Path]], targets):
-
+    """Create mel scale stats for dataset"""
     target_path = Path(targets[0])
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -765,9 +823,9 @@ def make_mel_stats(cache_csv_paths: typing.Iterable[typing.Union[str, Path]], ta
 
         return (mel_n, mel_sum, mel_square_sum)
 
-    total_mel_n = 0
-    total_mel_sum = 0.0
-    total_mel_square_sum = 0.0
+    total_mel_n: typing.Optional[torch.Tensor] = None
+    total_mel_sum: typing.Optional[torch.Tensor] = None
+    total_mel_square_sum: typing.Optional[torch.Tensor] = None
 
     for cache_csv_path in cache_csv_paths:
         with open(
@@ -776,10 +834,26 @@ def make_mel_stats(cache_csv_paths: typing.Iterable[typing.Union[str, Path]], ta
             reader = csv.reader(input_file, delimiter=_DELIMITER)
 
             for mel_n, mel_sum, mel_square_sum in executor.map(mel_sums, reader):
-                total_mel_n += mel_n
-                total_mel_sum += mel_sum
-                total_mel_square_sum += mel_square_sum
+                if total_mel_n is None:
+                    total_mel_n = mel_n
+                else:
+                    total_mel_n += mel_n
 
+                if total_mel_sum is None:
+                    total_mel_sum = mel_sum
+                else:
+                    total_mel_sum += mel_sum
+
+                if total_mel_square_sum is None:
+                    total_mel_square_sum = mel_square_sum
+                else:
+                    total_mel_square_sum += mel_square_sum
+
+    assert (
+        (total_mel_n is not None)
+        and (total_mel_sum is not None)
+        and (total_mel_square_sum is not None)
+    )
     mel_mean = total_mel_sum / total_mel_n
     mel_scale = np.sqrt(total_mel_square_sum / total_mel_n - mel_mean ** 2)
     stats = {"mel_mean": mel_mean.numpy(), "mel_scale": mel_scale.numpy()}
@@ -788,6 +862,7 @@ def make_mel_stats(cache_csv_paths: typing.Iterable[typing.Union[str, Path]], ta
 
 
 def task_mel_stats():
+    """Create mel scale stats for dataset"""
     if not _CONFIG.audio.scale_mels:
         return
 
@@ -800,7 +875,7 @@ def task_mel_stats():
         dataset_dir = _OUTPUT_DIR / dataset.name
 
         for split in ("train", "val"):
-            cache_csv_path = dataset_dir / f"{split}_{text_format}_align_cache.csv"
+            cache_csv_path = dataset_dir / f"{split}_{text_format}_cache.csv"
             cache_csv_paths.append(cache_csv_path)
 
     yield {

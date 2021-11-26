@@ -57,7 +57,7 @@ def train(
 
     # Gradient scaler
     scaler = GradScaler(enabled=config.fp16_run)
-    if scaler:
+    if config.fp16_run:
         _LOGGER.info("Using fp16 scaler")
 
     # Begin training
@@ -126,7 +126,6 @@ def train(
                     ),
                     best_path,
                 )
-
 
         epoch_end_time = time.perf_counter()
         _LOGGER.debug(

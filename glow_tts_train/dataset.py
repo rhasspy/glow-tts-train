@@ -311,8 +311,7 @@ def load_dataset(
 
         if num_spec_missing > 0:
             _LOGGER.debug(
-                "%s utterance(s) dropped whose spec file was missing",
-                num_spec_missing,
+                "%s utterance(s) dropped whose spec file was missing", num_spec_missing,
             )
 
         utt_phoneme_ids = {
