@@ -942,7 +942,7 @@ def task_speakers():
                 "name": str(speakers_path.relative_to(_OUTPUT_DIR)),
                 "actions": [(make_single_speakers, [dataset.name])],
                 "targets": [speakers_path],
-                "uptodate": True,
+                "uptodate": [True],
             }
 
 
