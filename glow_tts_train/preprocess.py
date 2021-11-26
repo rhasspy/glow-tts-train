@@ -24,7 +24,6 @@ from glow_tts_train.config import (
     TextCasing,
     TrainingConfig,
 )
-from kaldi_align import KaldiAligner, Utterance
 
 DOIT_CONFIG = {"action_string_formatting": "new"}
 
@@ -432,6 +431,8 @@ def make_kaldi_align(
     align_dir: typing.Union[str, Path],
     targets,
 ):
+    from kaldi_align import KaldiAligner, Utterance
+
     assert (
         dataset_config.audio_dir is not None
     ), f"Audio directory is required for alignment: {dataset_config}"
@@ -715,6 +716,8 @@ def make_mels(
 
         audio_norm, _sample_rate = librosa.load(**load_args)
         mel = torch.from_numpy(_CONFIG.audio.wav2mel(audio_norm))
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(mel, cache_path)
 
         return (utt_id, cache_path)
