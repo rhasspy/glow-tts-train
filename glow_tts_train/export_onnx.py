@@ -93,9 +93,7 @@ def main():
         config.save(config_file)
 
     # Create dummy input
-    sequences = torch.randint(
-        low=0, high=config.model.num_symbols, size=(1, 50), dtype=torch.long
-    ).cuda()
+    sequences = torch.randn(1,21, requires_grad=True).cuda()
     sequence_lengths = torch.IntTensor([sequences.size(1)]).cuda().long()
     scales = torch.FloatTensor([0.667, 1.0])
 
